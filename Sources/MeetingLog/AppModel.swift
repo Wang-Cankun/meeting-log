@@ -4,14 +4,25 @@ import Combine
 import Foundation
 
 @MainActor
+final class AudioLevels: ObservableObject {
+    @Published private(set) var microphone: Float = 0
+    @Published private(set) var system: Float = 0
+
+    func setMicrophone(_ value: Float) {
+        microphone = max(value, microphone * 0.72)
+    }
+
+    func setSystem(_ value: Float) {
+        system = max(value, system * 0.72)
+    }
+}
+
+@MainActor
 final class AppModel: ObservableObject {
     @Published var phase: AppPhase = .idle
     @Published var videoEnabled = false
-    @Published var microphoneEnabled = UserDefaults.standard.object(forKey: "microphoneEnabled") as? Bool ?? true
+    @Published var microphoneEnabled = UserDefaults.standard.object(forKey: "microphoneEnabled") as? Bool ?? false
     @Published var selectedMicrophoneID = UserDefaults.standard.string(forKey: "microphoneID")
-    @Published var microphoneLevel: Float = 0
-    @Published var systemAudioLevel: Float = 0
-    @Published var isTestingMicrophone = false
     @Published var apiKey = ""
     @Published var keySaved = false
     @Published var providerStatus: String?
@@ -29,16 +40,21 @@ final class AppModel: ObservableObject {
     @Published private(set) var processingText: String?
     @Published private(set) var processingCount = 0
     @Published private(set) var processingFailureCount = 0
+    @Published private(set) var waitingForProcessingCount = 0
+    @Published private(set) var isChangingRecording = false
 
     let capture = CaptureService()
-    let microphone = MicrophonePreflight()
-    let microphones = MicrophonePreflight.devices
+    let microphone = MicrophoneCapture()
+    let microphones = MicrophoneCapture.devices
+    let audioLevels = AudioLevels()
 
     private var currentDirectory: URL?
     private var currentManifest: SessionManifest?
     private var processingQueue: [ProcessingJob] = []
     private var currentProcessingPath: String?
     private var processingTask: Task<Void, Never>?
+    private var isResumingPendingSessions = false
+    private var pendingCaptureFailure: String?
 
     init() {
         keySaved = KeychainStore().containsKey()
@@ -50,15 +66,11 @@ final class AppModel: ObservableObject {
         capture.onScreenSelection = { [weak self] source in
             self?.selectedScreenSource = source
         }
-        capture.onError = { [weak self] message in
-            self?.systemAudioError = message
-            self?.phase = .failed(message)
-        }
-        microphone.onLevel = { [weak self] in self?.setMicrophoneLevel($0) }
-        capture.onMicrophoneLevel = { [weak self] in self?.setMicrophoneLevel($0) }
-        capture.onSystemAudioLevel = { [weak self] in self?.setSystemAudioLevel($0) }
+        capture.onError = { [weak self] message in self?.handleCaptureError(message) }
+        microphone.onLevel = { [weak self] in self?.audioLevels.setMicrophone($0) }
+        capture.onSystemAudioLevel = { [weak self] in self?.audioLevels.setSystem($0) }
         Task {
-            await refreshApplications()
+            refreshApplications()
             await resumePendingSessions()
         }
     }
@@ -72,23 +84,17 @@ final class AppModel: ObservableObject {
     var hasScreenSource: Bool { selectedScreenSource != nil }
 
     var canStartRecording: Bool {
-        guard !isRecording, !isTestingMicrophone, keySaved, !archiveRootPath.isEmpty else { return false }
+        guard !isRecording, !isChangingRecording, !archiveRootPath.isEmpty else { return false }
         guard systemAudioError == nil else { return false }
         if selectedSystemAudioBundleID != nil, !selectedSystemAudioIsAvailable { return false }
-        if microphoneEnabled {
-            guard microphonePermission != .denied, microphonePermission != .restricted, !microphones.isEmpty else { return false }
-        }
         return !videoEnabled || hasScreenSource
     }
 
     var statusText: String {
         switch phase {
         case .idle:
-            if !keySaved { return "OpenRouter setup required" }
             if videoEnabled, !hasScreenSource { return "Choose a screen source" }
             if selectedSystemAudioBundleID != nil, !selectedSystemAudioIsAvailable { return "Audio application unavailable" }
-            if microphoneEnabled, microphonePermission == .denied || microphonePermission == .restricted { return "Microphone permission required" }
-            if microphoneEnabled, microphones.isEmpty { return "No microphone available" }
             return "Ready to record"
         case .recording: return "Recording"
         case let .failed(value): return value
@@ -98,10 +104,10 @@ final class AppModel: ObservableObject {
     var microphoneStateText: String {
         if !microphoneEnabled { return "Not included" }
         if microphones.isEmpty { return "No microphone found" }
-        if microphonePermission == .denied || microphonePermission == .restricted { return "Permission required" }
+        if microphonePermission == .denied || microphonePermission == .restricted { return "Permission required, not included" }
         if isRecording { return "Recording" }
         if !isPanelOpen { return "Preview paused" }
-        return signalState(for: microphoneLevel)
+        return AudioLevelState(level: audioLevels.microphone).label
     }
 
     var systemAudioStateText: String {
@@ -109,7 +115,7 @@ final class AppModel: ObservableObject {
         if systemAudioError != nil { return "Unavailable" }
         if isRecording { return "Recording" }
         if !isPanelOpen { return "Preview paused" }
-        return signalState(for: systemAudioLevel)
+        return AudioLevelState(level: audioLevels.system).label
     }
 
     var selectedSystemAudioIsAvailable: Bool {
@@ -215,8 +221,8 @@ final class AppModel: ObservableObject {
         if enabled {
             Task { await startPreviewMonitoring() }
         } else {
-            microphone.stop()
-            microphoneLevel = 0
+            microphone.stopPreview()
+            audioLevels.setMicrophone(0)
         }
     }
 
@@ -234,40 +240,27 @@ final class AppModel: ObservableObject {
         capture.chooseScreen()
     }
 
+    func openSystemAudioPrivacy() {
+        openPrivacySettings(anchor: "Privacy_AudioCapture")
+    }
+
+    func openMicrophonePrivacy() {
+        openPrivacySettings(anchor: "Privacy_Microphone")
+    }
+
     func panelDidOpen() {
         isPanelOpen = true
         Task {
-            await refreshApplications()
+            refreshApplications()
             await startPreviewMonitoring()
         }
     }
 
     func panelDidClose() {
         isPanelOpen = false
-        microphone.stop()
-        Task { await capture.stopPreview() }
-    }
-
-    func testMicrophone() {
-        Task {
-            do {
-                guard microphoneEnabled else { return }
-                guard await AVCaptureDevice.requestAccess(for: .audio) else { throw PreflightError.permissionDenied }
-                microphonePermission = AVCaptureDevice.authorizationStatus(for: .audio)
-                isTestingMicrophone = true
-                try microphone.start(deviceID: selectedMicrophoneID)
-                try await microphone.recordAndPlayTest()
-                microphone.stop()
-                isTestingMicrophone = false
-                await startPreviewMonitoring()
-            } catch {
-                microphone.stop()
-                isTestingMicrophone = false
-                microphonePermission = AVCaptureDevice.authorizationStatus(for: .audio)
-                phase = .failed(error.localizedDescription)
-                await startPreviewMonitoring()
-            }
-        }
+        guard !isRecording else { return }
+        microphone.stopPreview()
+        capture.stopPreview()
     }
 
     func openArchive() {
@@ -302,7 +295,12 @@ final class AppModel: ObservableObject {
     }
 
     func toggleRecording() {
-        if isRecording { stopRecording() } else { startRecording() }
+        guard let action = phase.recordingAction(isBusy: isChangingRecording) else { return }
+        isChangingRecording = true
+        switch action {
+        case .start: startRecording()
+        case .stop: stopRecording()
+        }
     }
 
     func retryFailedProcessing() {
@@ -314,27 +312,37 @@ final class AppModel: ObservableObject {
         Task {
             var startStore: ArchiveStore?
             do {
-                let (store, key, model) = try configuration()
+                pendingCaptureFailure = nil
+                let store = try recordingStore()
                 startStore = store
-                await stopPreviewMonitoring()
+                stopPreviewMonitoring()
+                let recordsMicrophone = microphoneEnabled
+                    && microphonePermission == .authorized
+                    && !microphones.isEmpty
                 let created = try store.createPendingSession(
                     videoEnabled: videoEnabled,
-                    microphoneID: microphoneEnabled ? selectedMicrophoneID : nil
+                    microphoneID: recordsMicrophone ? selectedMicrophoneID : nil
                 )
                 currentDirectory = created.0
                 currentManifest = created.1
+                if recordsMicrophone {
+                    try microphone.startRecording(
+                        to: created.0.appending(path: "microphone.m4a"),
+                        deviceID: selectedMicrophoneID
+                    )
+                }
                 try await capture.start(
-                    audioOutputURL: created.0.appending(path: "capture.mov"),
+                    systemAudioOutputURL: created.0.appending(path: "system-audio.caf"),
                     screenOutputURL: videoEnabled ? created.0.appending(path: "screen.mov") : nil,
-                    applicationBundleID: selectedSystemAudioBundleID,
-                    microphoneID: selectedMicrophoneID,
-                    microphoneEnabled: microphoneEnabled
+                    applicationBundleID: selectedSystemAudioBundleID
                 )
-                _ = key
-                _ = model
+                if let pendingCaptureFailure { throw CaptureError.recordingFailed(pendingCaptureFailure) }
                 systemAudioError = nil
-                phase = .recording(startedAt: created.1.startedAt)
+                phase = .recording(startedAt: Date())
+                isChangingRecording = false
             } catch {
+                try? await capture.stop()
+                try? await microphone.stopRecording()
                 if let directory = currentDirectory, var manifest = currentManifest, let startStore {
                     manifest.status = .failed
                     manifest.lastError = error.localizedDescription
@@ -342,40 +350,96 @@ final class AppModel: ObservableObject {
                 }
                 currentDirectory = nil
                 currentManifest = nil
+                pendingCaptureFailure = nil
                 phase = .failed(error.localizedDescription)
+                isChangingRecording = false
                 await startPreviewMonitoring()
             }
         }
     }
 
-    private func stopRecording() {
+    private func stopRecording(failure initialFailure: String? = nil) {
+        let stoppedAt = Date()
+        let recordingStartedAt: Date? = if case let .recording(startedAt) = phase { startedAt } else { nil }
         Task {
+            var failure = initialFailure ?? pendingCaptureFailure
+            pendingCaptureFailure = nil
+            do { try await capture.stop() }
+            catch { failure = failure ?? error.localizedDescription }
+            do { try await microphone.stopRecording() }
+            catch { failure = failure ?? error.localizedDescription }
+
+            guard let directory = currentDirectory, var manifest = currentManifest else {
+                isChangingRecording = false
+                if let failure { phase = .failed(failure) }
+                return
+            }
+
+            if let failure {
+                manifest.status = .failed
+                manifest.lastError = failure
+                if let store = try? recordingStore() { try? store.write(manifest, to: directory) }
+                currentDirectory = nil
+                currentManifest = nil
+                phase = .failed(failure)
+                isChangingRecording = false
+                await startPreviewMonitoring()
+                return
+            }
+
+            if let recordingStartedAt,
+               !RecordingDurationPolicy.shouldProcess(startedAt: recordingStartedAt, stoppedAt: stoppedAt) {
+                do {
+                    try recordingStore().discardPendingSession(id: manifest.id)
+                    currentDirectory = nil
+                    currentManifest = nil
+                    phase = .idle
+                } catch {
+                    phase = .failed(error.localizedDescription)
+                }
+                isChangingRecording = false
+                await startPreviewMonitoring()
+                return
+            }
+
             do {
-                try await capture.stop()
-                guard let directory = currentDirectory, var manifest = currentManifest else { return }
+                let microphoneURL = directory.appending(path: "microphone.m4a")
+                try await MediaProcessor().makeCaptureMovie(
+                    systemAudio: directory.appending(path: "system-audio.caf"),
+                    microphone: FileManager.default.fileExists(atPath: microphoneURL.path) ? microphoneURL : nil,
+                    destination: directory.appending(path: "capture.mov")
+                )
                 manifest.status = .captured
-                let (store, key, model) = try configuration()
+                let store = try recordingStore()
                 try store.write(manifest, to: directory)
                 currentDirectory = nil
                 currentManifest = nil
                 phase = .idle
+                isChangingRecording = false
                 await startPreviewMonitoring()
-                enqueue(ProcessingJob(directory: directory, manifest: manifest, store: store, key: key, model: model))
+                await resumePendingSessions()
             } catch {
+                manifest.status = .failed
+                manifest.lastError = error.localizedDescription
+                if let store = try? recordingStore() { try? store.write(manifest, to: directory) }
+                currentDirectory = nil
+                currentManifest = nil
+                processingFailureCount += 1
                 phase = .failed(error.localizedDescription)
+                isChangingRecording = false
                 await startPreviewMonitoring()
             }
         }
     }
 
     private func startPreviewMonitoring() async {
-        guard isPanelOpen, !isRecording, !isTestingMicrophone else { return }
+        guard isPanelOpen, !isRecording else { return }
 
         if microphoneEnabled, microphonePermission == .notDetermined {
             _ = await AVCaptureDevice.requestAccess(for: .audio)
             microphonePermission = AVCaptureDevice.authorizationStatus(for: .audio)
         }
-        guard isPanelOpen, !isRecording, !isTestingMicrophone else { return }
+        guard isPanelOpen, !isRecording else { return }
         if microphoneEnabled, microphonePermission == .authorized, !microphones.isEmpty {
             do { try microphone.start(deviceID: selectedMicrophoneID) }
             catch { phase = .failed(error.localizedDescription) }
@@ -392,13 +456,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func stopPreviewMonitoring() async {
-        microphone.stop()
-        await capture.stopPreview()
+    private func stopPreviewMonitoring() {
+        microphone.stopPreview()
+        capture.stopPreview()
     }
 
     private func restartSystemAudioPreview() async {
-        await capture.stopPreview()
+        capture.stopPreview()
         guard isPanelOpen, !isRecording, selectedSystemAudioIsAvailable else { return }
         do {
             try await capture.startPreview(applicationBundleID: selectedSystemAudioBundleID)
@@ -410,30 +474,57 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func refreshApplications() async {
-        do { applications = try await capture.availableApplications() }
-        catch { systemAudioError = error.localizedDescription }
-    }
-
-    private func setMicrophoneLevel(_ value: Float) {
-        microphoneLevel = max(value, microphoneLevel * 0.72)
-    }
-
-    private func setSystemAudioLevel(_ value: Float) {
-        systemAudioLevel = max(value, systemAudioLevel * 0.72)
-    }
-
-    private func signalState(for level: Float) -> String {
-        AudioLevelState(level: level).label
+    private func refreshApplications() {
+        applications = SystemAudioCapture.applications()
+        if selectedSystemAudioBundleID != nil, !selectedSystemAudioIsAvailable {
+            selectedSystemAudioBundleID = nil
+            selectedSystemAudioName = "All Mac audio"
+        }
     }
 
     private func resumePendingSessions() async {
         guard !archiveRootPath.isEmpty,
-              let key = try? KeychainStore().load(), !key.isEmpty
+              !isRecording,
+              !isChangingRecording,
+              !isResumingPendingSessions
         else { return }
+        isResumingPendingSessions = true
+        defer { isResumingPendingSessions = false }
         let store = ArchiveStore(root: URL(filePath: archiveRootPath, directoryHint: .isDirectory))
         guard let sessions = try? store.pendingSessions() else { return }
-        for (directory, manifest) in sessions where manifest.status != .recording || FileManager.default.fileExists(atPath: directory.appending(path: "capture.mov").path) {
+        var recoverable: [(URL, SessionManifest)] = []
+        for (directory, originalManifest) in sessions {
+            guard directory != currentDirectory else { continue }
+            var manifest = originalManifest
+            guard let input = MediaProcessor.pendingInput(in: directory) else { continue }
+            if case let .raw(systemAudio, microphone) = input {
+                do {
+                    try await MediaProcessor().makeCaptureMovie(
+                        systemAudio: systemAudio,
+                        microphone: microphone,
+                        destination: directory.appending(path: "capture.mov")
+                    )
+                } catch {
+                    if microphone != nil {
+                        try? await MediaProcessor().makeCaptureMovie(
+                            systemAudio: systemAudio,
+                            microphone: nil,
+                            destination: directory.appending(path: "capture.mov")
+                        )
+                    }
+                }
+                guard FileManager.default.fileExists(atPath: directory.appending(path: "capture.mov").path) else {
+                    continue
+                }
+                manifest.status = .captured
+                manifest.lastError = nil
+                try? store.write(manifest, to: directory)
+            }
+            recoverable.append((directory, manifest))
+        }
+        waitingForProcessingCount = recoverable.count
+        guard let key = try? KeychainStore().load(), !key.isEmpty, !selectedModelID.isEmpty else { return }
+        for (directory, manifest) in recoverable {
             enqueue(ProcessingJob(
                 directory: directory,
                 manifest: manifest,
@@ -465,6 +556,7 @@ final class AppModel: ObservableObject {
             processingCount = processingQueue.count + 1
             do {
                 let destination = try await process(job)
+                waitingForProcessingCount = max(0, waitingForProcessingCount - 1)
                 if !isRecording { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
             } catch {
                 if case OpenRouterError.authentication = error { keySaved = false }
@@ -489,20 +581,24 @@ final class AppModel: ObservableObject {
         return try await processor.process(directory: job.directory, manifest: job.manifest)
     }
 
-    private func configuration() throws -> (ArchiveStore, String, String) {
+    private func recordingStore() throws -> ArchiveStore {
         guard !archiveRootPath.isEmpty else { throw AppConfigurationError.archiveRoot }
-        guard !selectedModelID.isEmpty else { throw AppConfigurationError.model }
-        let key = (try? KeychainStore().load()) ?? ""
-        guard !key.isEmpty else { throw AppConfigurationError.apiKey }
-        return (
-            ArchiveStore(root: URL(filePath: archiveRootPath, directoryHint: .isDirectory)),
-            key,
-            selectedModelID
-        )
+        return ArchiveStore(root: URL(filePath: archiveRootPath, directoryHint: .isDirectory))
+    }
+
+    private func handleCaptureError(_ message: String) {
+        guard currentDirectory != nil else {
+            phase = .failed(message)
+            return
+        }
+        pendingCaptureFailure = message
+        guard !isChangingRecording else { return }
+        isChangingRecording = true
+        stopRecording(failure: message)
     }
 
     private var canChangeArchive: Bool {
-        guard !isRecording, !isProcessing else {
+        guard !isRecording, !isChangingRecording, !isProcessing else {
             phase = .failed("Wait for recording and processing to finish before changing the archive.")
             return false
         }
@@ -520,6 +616,11 @@ final class AppModel: ObservableObject {
         Task { await resumePendingSessions() }
     }
 
+    private func openPrivacySettings(anchor: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     private static let defaultArchiveURL = FileManager.default.homeDirectoryForCurrentUser
         .appending(path: "Library/CloudStorage/Dropbox/Obsidian/meeting-log", directoryHint: .isDirectory)
 }
@@ -535,13 +636,11 @@ private struct ProcessingJob {
 enum AppConfigurationError: LocalizedError {
     case archiveRoot
     case apiKey
-    case model
 
     var errorDescription: String? {
         switch self {
         case .archiveRoot: "Choose an archive folder first."
         case .apiKey: "Save an OpenRouter API key first."
-        case .model: "Choose an OpenRouter model first."
         }
     }
 }

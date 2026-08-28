@@ -31,6 +31,11 @@ struct ArchiveStore {
         try encoder.encode(manifest).write(to: directory.appending(path: "session.json"), options: .atomic)
     }
 
+    func discardPendingSession(id: UUID) throws {
+        let directory = root.appending(path: ".pending/\(id.uuidString.lowercased())", directoryHint: .isDirectory)
+        try fileManager.removeItem(at: directory)
+    }
+
     func pendingSessions() throws -> [(URL, SessionManifest)] {
         let pending = root.appending(path: ".pending", directoryHint: .isDirectory)
         guard fileManager.fileExists(atPath: pending.path) else { return [] }

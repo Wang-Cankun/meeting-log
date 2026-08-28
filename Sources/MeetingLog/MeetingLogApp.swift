@@ -8,9 +8,10 @@ struct MeetingLogApp: App {
         MenuBarExtra {
             ControlPanel(model: model)
         } label: {
-            Image(systemName: model.isRecording ? "record.circle.fill" : "waveform")
+            let presentation = StatusItemPresentation(phase: model.phase)
+            Image(systemName: presentation.systemImage)
                 .symbolRenderingMode(.monochrome)
-                .accessibilityLabel("MeetingLog")
+                .accessibilityLabel(presentation.accessibilityLabel)
         }
         .menuBarExtraStyle(.window)
 

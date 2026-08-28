@@ -4,7 +4,6 @@ enum SessionStatus: String, Codable {
     case recording
     case captured
     case processing
-    case complete
     case failed
 }
 
@@ -69,6 +68,40 @@ enum AppPhase: Equatable {
     case idle
     case recording(startedAt: Date)
     case failed(String)
+
+    func recordingAction(isBusy: Bool) -> RecordingAction? {
+        guard !isBusy else { return nil }
+        if case .recording = self { return .stop }
+        return .start
+    }
+}
+
+enum RecordingAction: Equatable {
+    case start
+    case stop
+}
+
+enum RecordingDurationPolicy {
+    static let minimumSeconds: TimeInterval = 10
+
+    static func shouldProcess(startedAt: Date, stoppedAt: Date) -> Bool {
+        stoppedAt.timeIntervalSince(startedAt) >= minimumSeconds
+    }
+}
+
+struct StatusItemPresentation: Equatable {
+    let systemImage: String
+    let accessibilityLabel: String
+
+    init(phase: AppPhase) {
+        if case .recording = phase {
+            systemImage = "record.circle.fill"
+            accessibilityLabel = "MeetingLog recording"
+        } else {
+            systemImage = "waveform"
+            accessibilityLabel = "MeetingLog, ready"
+        }
+    }
 }
 
 enum AudioLevelState: Equatable {

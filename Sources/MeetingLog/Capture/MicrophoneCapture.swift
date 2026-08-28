@@ -2,29 +2,33 @@
 import Foundation
 
 @MainActor
-final class MicrophonePreflight: NSObject, AVCaptureFileOutputRecordingDelegate {
+final class MicrophoneCapture: NSObject, AVCaptureFileOutputRecordingDelegate {
     private let session = AVCaptureSession()
     private let dataOutput = AVCaptureAudioDataOutput()
     private let fileOutput = AVCaptureAudioFileOutput()
     private var timer: Timer?
-    private var player: AVAudioPlayer?
-    private var finish: CheckedContinuation<Void, Never>?
+    private var finish: CheckedContinuation<Void, any Error>?
+    private var recordingError: Error?
     var onLevel: ((Float) -> Void)?
 
     static var devices: [AVCaptureDevice] {
-        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified).devices
+        AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices
     }
 
     func start(deviceID: String?) throws {
-        stop()
+        stopPreview()
         guard let device = deviceID.flatMap(AVCaptureDevice.init(uniqueID:)) ?? AVCaptureDevice.default(for: .audio) else {
-            throw PreflightError.noMicrophone
+            throw MicrophoneError.noMicrophone
         }
         let input = try AVCaptureDeviceInput(device: device)
         session.beginConfiguration()
         guard session.canAddInput(input), session.canAddOutput(dataOutput), session.canAddOutput(fileOutput) else {
             session.commitConfiguration()
-            throw PreflightError.unavailable
+            throw MicrophoneError.unavailable
         }
         session.addInput(input)
         session.addOutput(dataOutput)
@@ -45,28 +49,33 @@ final class MicrophonePreflight: NSObject, AVCaptureFileOutputRecordingDelegate 
         }
     }
 
-    func stop() {
-        timer?.invalidate()
-        timer = nil
-        if fileOutput.isRecording { fileOutput.stopRecording() }
-        if session.isRunning { session.stopRunning() }
-        session.inputs.forEach(session.removeInput)
-        session.outputs.forEach(session.removeOutput)
-        onLevel?(0)
+    func startRecording(to outputURL: URL, deviceID: String?) throws {
+        try start(deviceID: deviceID)
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try FileManager.default.removeItem(at: outputURL)
+        }
+        recordingError = nil
+        fileOutput.startRecording(to: outputURL, outputFileType: .m4a, recordingDelegate: self)
     }
 
-    func recordAndPlayTest() async throws {
-        guard session.isRunning else { throw PreflightError.unavailable }
-        let url = FileManager.default.temporaryDirectory.appending(path: "meeting-log-mic-test.m4a")
-        try? FileManager.default.removeItem(at: url)
-        fileOutput.startRecording(to: url, outputFileType: .m4a, recordingDelegate: self)
-        try await Task.sleep(for: .seconds(5))
-        await withCheckedContinuation { continuation in
+    func stopPreview() {
+        guard !fileOutput.isRecording else { return }
+        stopSession()
+    }
+
+    func stopRecording() async throws {
+        defer { stopSession() }
+        guard fileOutput.isRecording else {
+            if let recordingError {
+                self.recordingError = nil
+                throw recordingError
+            }
+            return
+        }
+        try await withCheckedThrowingContinuation { continuation in
             finish = continuation
             fileOutput.stopRecording()
         }
-        player = try AVAudioPlayer(contentsOf: url)
-        player?.play()
     }
 
     nonisolated func fileOutput(
@@ -76,22 +85,31 @@ final class MicrophonePreflight: NSObject, AVCaptureFileOutputRecordingDelegate 
         error: (any Error)?
     ) {
         Task { @MainActor in
-            finish?.resume()
+            recordingError = error
+            if let error { finish?.resume(throwing: error) }
+            else { finish?.resume() }
             finish = nil
         }
     }
+
+    private func stopSession() {
+        timer?.invalidate()
+        timer = nil
+        if session.isRunning { session.stopRunning() }
+        session.inputs.forEach(session.removeInput)
+        session.outputs.forEach(session.removeOutput)
+        onLevel?(0)
+    }
 }
 
-enum PreflightError: LocalizedError {
+enum MicrophoneError: LocalizedError {
     case noMicrophone
     case unavailable
-    case permissionDenied
 
     var errorDescription: String? {
         switch self {
         case .noMicrophone: "No microphone is available."
-        case .unavailable: "The selected microphone cannot be tested."
-        case .permissionDenied: "Microphone permission was denied."
+        case .unavailable: "The selected microphone is unavailable."
         }
     }
 }

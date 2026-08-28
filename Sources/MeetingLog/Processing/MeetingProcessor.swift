@@ -88,6 +88,8 @@ struct MeetingProcessor {
             try? FileManager.default.removeItem(at: directory.appending(path: "chunks"))
             try? FileManager.default.removeItem(at: directory.appending(path: "coverage.json"))
             try? FileManager.default.removeItem(at: directory.appending(path: "session.json"))
+            try? FileManager.default.removeItem(at: directory.appending(path: "system-audio.caf"))
+            try? FileManager.default.removeItem(at: directory.appending(path: "microphone.m4a"))
 
             let destination = try store.finalDirectory(for: analysis, startedAt: manifest.startedAt)
             try store.moveCompletedSession(from: directory, to: destination)

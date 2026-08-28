@@ -20,7 +20,9 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>MeetingLog records your microphone with meeting audio.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>MeetingLog records audio playing on this Mac for your meeting archive.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>MeetingLog records system audio and optional meeting video.</string>
+    <string>MeetingLog records optional meeting video when Record Screen is enabled.</string>
 </dict>
 </plist>

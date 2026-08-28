@@ -5,7 +5,7 @@
 | Decision | Status | Consequence |
 |---|---|---|
 | Personal macOS 26 app | accepted | No accounts, installer, updater, or backward-compatibility paths |
-| Native SwiftUI | accepted | ScreenCaptureKit, AVFoundation, Security, and URLSession remain direct dependencies |
+| Native SwiftUI | accepted | Core Audio, ScreenCaptureKit, AVFoundation, Security, and URLSession remain direct dependencies |
 | Gemini 3.7 Flash | accepted | One configured OpenRouter key serves transcription and summary |
 | Five-minute blocks with ten-second overlap | accepted | Every block must succeed before final Markdown is written |
 | Transcript is evidence | accepted | Unsupported decisions are empty; unsupported context and reasons are empty strings |
@@ -15,3 +15,6 @@
 | Zero third-party packages | accepted | A new package requires an observed missing native capability |
 | Independent audio and video scope | accepted | System audio selects all Mac audio or one application; the Apple picker selects optional screen video |
 | Native settings window | accepted | Archive and OpenRouter configuration stay out of the recording panel |
+| Recording precedes AI configuration | accepted | Missing OpenRouter credentials leave a recoverable local session and never block capture |
+| Core Audio owns system audio | accepted | System audio uses its dedicated privacy permission; ScreenCaptureKit is requested only for optional video |
+| Timer-led recording panel | accepted | The panel shows elapsed time while recording; the menu bar uses a static recording indicator because self-updating SwiftUI content in a `MenuBarExtra` label caused an unbounded redraw loop on macOS 26 |

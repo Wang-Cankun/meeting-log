@@ -25,8 +25,6 @@ struct SettingsView: View {
             }
 
             Section("AI processing") {
-                LabeledContent("Service", value: "OpenRouter")
-
                 Picker("Model", selection: Binding(
                     get: { model.selectedModelID },
                     set: { model.selectModel($0) }
@@ -69,7 +67,7 @@ struct SettingsView: View {
                         .disabled(!model.keySaved || model.isRecording)
                 }
 
-                Text("Audio previews stay on this Mac. MeetingLog sends compressed audio to OpenRouter only after recording stops.")
+                Text("Recording works without an API key. MeetingLog sends compressed audio to OpenRouter only after recording stops.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -78,12 +76,11 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .padding(16)
         .frame(width: 520, height: 400)
-        .preferredColorScheme(.light)
         .onAppear { model.loadModels() }
     }
 
     private var providerStateText: String {
-        model.providerStatus ?? (model.keySaved ? "API key stored in Keychain" : "API key required before recording")
+        model.providerStatus ?? (model.keySaved ? "API key stored in Keychain" : "API key required for transcription")
     }
 
     private var providerStateSymbol: String {

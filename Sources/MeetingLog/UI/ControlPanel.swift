@@ -23,6 +23,8 @@ struct ControlPanel: View {
                 processingStatus
             }
             Divider()
+            recentMeetings
+            Divider()
             recordingControl
             footer
         }
@@ -249,7 +251,7 @@ struct ControlPanel: View {
                     .controlSize(.small)
                     .disabled(model.isRecording || model.isChangingRecording)
             } else if !model.keySaved && model.waitingForProcessingCount > 0 {
-                Button("Settings…") { showSettings() }.controlSize(.small)
+                Button("Settings") { showSettings() }.controlSize(.small)
             }
         }
         .padding(.horizontal, 16)
@@ -292,12 +294,63 @@ struct ControlPanel: View {
         .padding(.vertical, 12)
     }
 
+    private var recentMeetings: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Recent meetings")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Show All in Finder") { model.showArchiveInFinder() }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+
+            if model.recentMeetings.isEmpty {
+                Text("Completed meetings will appear here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            } else {
+                ForEach(model.recentMeetings) { meeting in
+                    HStack(spacing: 8) {
+                        Button { model.showInFinder(meeting.url) } label: {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(meeting.title)
+                                    .lineLimit(1)
+                                Text("\(meeting.projectName) · \(meeting.dateText)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Show \(meeting.title) in Finder")
+
+                        Button(role: .destructive) { model.deleteMeeting(meeting) } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(model.isRecording || model.isChangingRecording || model.isProcessing)
+                        .accessibilityLabel("Delete \(meeting.title)")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                }
+            }
+        }
+    }
+
     private var footer: some View {
         HStack {
-            Button("Open Archive") { model.openArchive() }
-                .disabled(model.archiveRootPath.isEmpty)
             Spacer()
-            Button("Settings…") { showSettings() }
+            Button("Settings") { showSettings() }
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
         .buttonStyle(.plain)

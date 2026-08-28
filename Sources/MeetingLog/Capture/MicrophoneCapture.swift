@@ -1,15 +1,16 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-@MainActor
-final class MicrophoneCapture: NSObject, AVCaptureFileOutputRecordingDelegate {
+final class MicrophoneCapture: NSObject, AVCaptureFileOutputRecordingDelegate, @unchecked Sendable {
+    private let queue = DispatchQueue(label: "meeting-log.microphone", qos: .userInitiated)
     private let session = AVCaptureSession()
     private let dataOutput = AVCaptureAudioDataOutput()
     private let fileOutput = AVCaptureAudioFileOutput()
-    private var timer: Timer?
+    private var timer: DispatchSourceTimer?
     private var finish: CheckedContinuation<Void, any Error>?
     private var recordingError: Error?
-    var onLevel: ((Float) -> Void)?
+    private var previewGeneration = 0
+    var onLevel: (@Sendable (Float) -> Void)?
 
     static var devices: [AVCaptureDevice] {
         AVCaptureDevice.DiscoverySession(
@@ -19,8 +20,30 @@ final class MicrophoneCapture: NSObject, AVCaptureFileOutputRecordingDelegate {
         ).devices
     }
 
-    func start(deviceID: String?) throws {
-        stopPreview()
+    func setPreview(enabled: Bool, deviceID: String?, generation: Int) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                guard generation >= self.previewGeneration else {
+                    continuation.resume()
+                    return
+                }
+                self.previewGeneration = generation
+                do {
+                    if enabled {
+                        try self.startOnQueue(deviceID: deviceID)
+                    } else if !self.fileOutput.isRecording {
+                        self.stopSessionOnQueue()
+                    }
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func startOnQueue(deviceID: String?) throws {
+        if !fileOutput.isRecording { stopSessionOnQueue() }
         guard let device = deviceID.flatMap(AVCaptureDevice.init(uniqueID:)) ?? AVCaptureDevice.default(for: .audio) else {
             throw MicrophoneError.noMicrophone
         }
@@ -41,40 +64,48 @@ final class MicrophoneCapture: NSObject, AVCaptureFileOutputRecordingDelegate {
         ]
         session.commitConfiguration()
         session.startRunning()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                let db = self?.dataOutput.connection(with: .audio)?.audioChannels.first?.averagePowerLevel ?? -60
-                self?.onLevel?(max(0, min(1, (db + 60) / 60)))
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(100))
+        timer.setEventHandler { [weak self] in
+            let db = self?.dataOutput.connection(with: .audio)?.audioChannels.first?.averagePowerLevel ?? -60
+            self?.onLevel?(max(0, min(1, (db + 60) / 60)))
+        }
+        timer.resume()
+        self.timer = timer
+    }
+
+    func startRecording(to outputURL: URL, deviceID: String?) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    try self.startOnQueue(deviceID: deviceID)
+                    if FileManager.default.fileExists(atPath: outputURL.path) {
+                        try FileManager.default.removeItem(at: outputURL)
+                    }
+                    self.recordingError = nil
+                    self.fileOutput.startRecording(to: outputURL, outputFileType: .m4a, recordingDelegate: self)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
         }
-    }
-
-    func startRecording(to outputURL: URL, deviceID: String?) throws {
-        try start(deviceID: deviceID)
-        if FileManager.default.fileExists(atPath: outputURL.path) {
-            try FileManager.default.removeItem(at: outputURL)
-        }
-        recordingError = nil
-        fileOutput.startRecording(to: outputURL, outputFileType: .m4a, recordingDelegate: self)
-    }
-
-    func stopPreview() {
-        guard !fileOutput.isRecording else { return }
-        stopSession()
     }
 
     func stopRecording() async throws {
-        defer { stopSession() }
-        guard fileOutput.isRecording else {
-            if let recordingError {
-                self.recordingError = nil
-                throw recordingError
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            queue.async {
+                guard self.fileOutput.isRecording else {
+                    let error = self.recordingError
+                    self.recordingError = nil
+                    self.stopSessionOnQueue()
+                    if let error { continuation.resume(throwing: error) }
+                    else { continuation.resume() }
+                    return
+                }
+                self.finish = continuation
+                self.fileOutput.stopRecording()
             }
-            return
-        }
-        try await withCheckedThrowingContinuation { continuation in
-            finish = continuation
-            fileOutput.stopRecording()
         }
     }
 
@@ -84,16 +115,17 @@ final class MicrophoneCapture: NSObject, AVCaptureFileOutputRecordingDelegate {
         from connections: [AVCaptureConnection],
         error: (any Error)?
     ) {
-        Task { @MainActor in
-            recordingError = error
-            if let error { finish?.resume(throwing: error) }
-            else { finish?.resume() }
-            finish = nil
+        queue.async {
+            self.recordingError = error
+            self.stopSessionOnQueue()
+            if let error { self.finish?.resume(throwing: error) }
+            else { self.finish?.resume() }
+            self.finish = nil
         }
     }
 
-    private func stopSession() {
-        timer?.invalidate()
+    private func stopSessionOnQueue() {
+        timer?.cancel()
         timer = nil
         if session.isRunning { session.stopRunning() }
         session.inputs.forEach(session.removeInput)

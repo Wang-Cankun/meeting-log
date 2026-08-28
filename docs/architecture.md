@@ -26,7 +26,7 @@ menu bar panel
 |---|---|---|
 | `Capture` | Core Audio system-audio scope, screen picker, microphone and media capture | prompts or archive naming |
 | `Processing` | chunking, OpenRouter requests, coverage, transcript and summary | UI or permanent root selection |
-| `Storage` | Keychain, pending sessions, ASCII paths, final archive writes | capture lifecycle |
+| `Storage` | Keychain, pending sessions, project folders, final archive writes | capture lifecycle |
 | `UI` | menu bar controls and visible state | media or network implementation |
 | `Models` | persisted and API boundary types | orchestration |
 
@@ -34,10 +34,10 @@ menu bar panel
 
 ```text
 <root>/
-  <project-slug>/
+  <project-name>/
     context.md
     meetings/
-      <yyyymmdd-hhmm-title-slug>/
+      <MMddyyyy><title>/
         transcript.md
         summary.md
         audio.m4a
@@ -46,10 +46,12 @@ menu bar panel
 
 Incomplete sessions remain under `<root>/.pending/<uuid>/` with `session.json`. Startup recovery resumes processing from that manifest.
 
+Project folders are the source of truth and may use Unicode names. Users create projects; project inference selects an existing folder or uses `Inbox`. Completed meeting folders use the recording start date followed immediately by the human-readable title, with `-2`, `-3`, and later suffixes for collisions. The menu panel lists the three most recent completed meetings; deletion moves the complete meeting directory to the macOS Trash.
+
 System audio uses a private Core Audio process tap and aggregate device. All Mac audio is the default; one running application can be selected by bundle identifier. The tap handles preview and writes `system-audio.caf` during recording without using the screen picker.
 
-Microphone capture is optional and writes `microphone.m4a`. After capture stops, both audio sources are mixed into `capture.mov`; the original tracks remain until compressed audio and Markdown outputs complete. Recovery also accepts older sessions that only contain `capture.mov`.
+Microphone capture is optional and writes `microphone.m4a`. Its `AVCaptureSession` configuration, start, and stop operations run on one serial background queue so device transitions never block the main actor. After capture stops, both audio sources are mixed into `capture.mov`; the original tracks remain until compressed audio and Markdown outputs complete. Recovery also accepts older sessions that only contain `capture.mov`.
 
-Recording start and stop are single-flight operations. Capture callback failures use the same stop path so every active source is closed. Pending-session recovery does not run during recording, and `capture.mov` becomes visible only after a complete export is atomically moved into place. A successfully stopped recording shorter than 10 seconds is discarded before mixing; capture failures still preserve the session in `.pending`.
+Recording start and stop are single-flight operations. Capture callback failures use the same stop path so every active source is closed. Pending-session recovery does not run during recording, and `capture.mov` becomes visible only after a complete export is atomically moved into place. Completed outputs move into the selected project before recoverable pending media is cleaned up. A successfully stopped recording shorter than 10 seconds is discarded before mixing; capture failures still preserve the session in `.pending`.
 
 ScreenCaptureKit handles optional video only. The Apple content picker selects a display, window, or application after Record Screen is enabled. Video remains 1080p HEVC at 10 FPS and writes directly to `screen.mov`.

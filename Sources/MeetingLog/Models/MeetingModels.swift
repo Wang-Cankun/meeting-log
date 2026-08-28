@@ -46,7 +46,6 @@ struct MeetingDecision: Codable, Equatable {
 struct MeetingAnalysis: Codable, Equatable {
     var title: String
     var projectName: String
-    var projectSlug: String
     var summary: [String]
     var actionItems: [ActionItem]
     var decisions: [MeetingDecision]
@@ -56,12 +55,27 @@ struct MeetingAnalysis: Codable, Equatable {
 struct ProjectChoice: Codable, Equatable {
     var title: String
     var projectName: String
-    var projectSlug: String
 }
 
 struct ProjectContext: Equatable {
-    let slug: String
+    let name: String
     let markdown: String
+}
+
+struct ProjectFolder: Identifiable, Equatable {
+    var id: URL { url }
+    let name: String
+    let url: URL
+}
+
+struct ArchivedMeeting: Identifiable, Equatable {
+    var id: URL { url }
+    let title: String
+    let projectName: String
+    let dateText: String
+    let date: Date
+    let createdAt: Date
+    let url: URL
 }
 
 enum AppPhase: Equatable {

@@ -1,12 +1,14 @@
 import Foundation
 
-precondition(ArchiveStore.slug("  Café Project / Linux Test  ") == "cafe-project-linux-test")
-precondition(ArchiveStore.slug("中文会议") == "zhong-wen-hui-yi")
+precondition(ArchiveStore.meetingTitle("  中文会议 / 讨论: 下一步  ") == "中文会议 讨论 下一步")
+do {
+    _ = try ArchiveStore.projectName(".pending")
+    preconditionFailure("Hidden project names must be rejected")
+} catch {}
 
 let analysis = MeetingAnalysis(
     title: "Weekly sync",
     projectName: "Demo",
-    projectSlug: "demo",
     summary: ["Reviewed the launch."],
     actionItems: [.init(assignee: "", task: "Send the draft", deadline: "", context: "")],
     decisions: [],

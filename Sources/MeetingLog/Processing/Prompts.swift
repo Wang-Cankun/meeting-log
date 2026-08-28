@@ -14,10 +14,10 @@ enum Prompts {
     }
 
     static func projectInference(transcript: String, globalContext: String, projectContexts: [ProjectContext]) -> String {
-        let projects = projectContexts.map { "## \($0.slug)\n\($0.markdown)" }.joined(separator: "\n\n")
+        let projects = projectContexts.map { "## \($0.name)\n\($0.markdown)" }.joined(separator: "\n\n")
         return """
-        Infer a concise meeting title and the best project for this transcript. Reuse an existing project slug when its context clearly matches; otherwise create a concise lowercase ASCII kebab-case slug. Return JSON only:
-        {"title":"","projectName":"","projectSlug":""}
+        Infer a concise meeting title in the transcript's language. Choose projectName exactly from Existing projects when the context clearly matches. Use "Inbox" when no existing project clearly matches. Never invent another project. Return JSON only:
+        {"title":"","projectName":""}
 
         Global context:
         \(globalContext.isEmpty ? "None provided." : globalContext)
@@ -32,7 +32,7 @@ enum Prompts {
 
     static func analysis(transcript: String, globalContext: String, project: ProjectChoice, projectContext: String) -> String {
         """
-        Analyze the meeting transcript below for project "\(project.projectName)" (\(project.projectSlug)). Use the supplied title "\(project.title)".
+        Analyze the meeting transcript below for project "\(project.projectName)". Use the supplied title "\(project.title)".
 
         Evidence rules:
         - Use only the transcript and supplied context.
@@ -42,7 +42,7 @@ enum Prompts {
         - Keep every list concise and factual.
 
         Return one JSON object with exactly these keys:
-        {"title":"","projectName":"","projectSlug":"","summary":[""],"actionItems":[{"assignee":"","task":"","deadline":"","context":""}],"decisions":[{"decision":"","reasoning":""}],"keyTopics":[""]}
+        {"title":"","projectName":"","summary":[""],"actionItems":[{"assignee":"","task":"","deadline":"","context":""}],"decisions":[{"decision":"","reasoning":""}],"keyTopics":[""]}
 
         Global context:
         \(globalContext.isEmpty ? "None provided." : globalContext)

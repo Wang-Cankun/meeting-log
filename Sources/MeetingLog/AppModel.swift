@@ -42,6 +42,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var processingFailureCount = 0
     @Published private(set) var waitingForProcessingCount = 0
     @Published private(set) var isChangingRecording = false
+    @Published private(set) var projects: [ProjectFolder] = []
+    @Published private(set) var recentMeetings: [ArchivedMeeting] = []
 
     let capture = CaptureService()
     let microphone = MicrophoneCapture()
@@ -53,6 +55,7 @@ final class AppModel: ObservableObject {
     private var processingQueue: [ProcessingJob] = []
     private var currentProcessingPath: String?
     private var processingTask: Task<Void, Never>?
+    private var previewGeneration = 0
     private var isResumingPendingSessions = false
     private var pendingCaptureFailure: String?
 
@@ -63,11 +66,14 @@ final class AppModel: ObservableObject {
             at: URL(filePath: archiveRootPath, directoryHint: .isDirectory),
             withIntermediateDirectories: true
         )
+        refreshArchive()
         capture.onScreenSelection = { [weak self] source in
             self?.selectedScreenSource = source
         }
         capture.onError = { [weak self] message in self?.handleCaptureError(message) }
-        microphone.onLevel = { [weak self] in self?.audioLevels.setMicrophone($0) }
+        microphone.onLevel = { [weak self] value in
+            Task { @MainActor in self?.audioLevels.setMicrophone(value) }
+        }
         capture.onSystemAudioLevel = { [weak self] in self?.audioLevels.setSystem($0) }
         Task {
             refreshApplications()
@@ -136,16 +142,6 @@ final class AppModel: ObservableObject {
         setArchiveRoot(url)
     }
 
-    func useObsidianArchive() {
-        guard canChangeArchive else { return }
-        do {
-            try FileManager.default.createDirectory(at: Self.defaultArchiveURL, withIntermediateDirectories: true)
-            setArchiveRoot(Self.defaultArchiveURL)
-        } catch {
-            phase = .failed("Cannot use the Obsidian archive: \(error.localizedDescription)")
-        }
-    }
-
     func saveAndVerifyKey() {
         Task {
             let value = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -208,28 +204,23 @@ final class AppModel: ObservableObject {
     func selectMicrophone(_ id: String?) {
         selectedMicrophoneID = id
         UserDefaults.standard.set(id, forKey: "microphoneID")
-        Task {
-            guard microphoneEnabled, isPanelOpen, !isRecording, microphonePermission == .authorized else { return }
-            do { try microphone.start(deviceID: selectedMicrophoneID) }
-            catch { phase = .failed(error.localizedDescription) }
-        }
+        schedulePreviewStart()
     }
 
     func setMicrophoneEnabled(_ enabled: Bool) {
         microphoneEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "microphoneEnabled")
         if enabled {
-            Task { await startPreviewMonitoring() }
+            schedulePreviewStart()
         } else {
-            microphone.stopPreview()
-            audioLevels.setMicrophone(0)
+            schedulePreviewStop()
         }
     }
 
     func selectSystemAudio(_ application: CaptureApplication?) {
         selectedSystemAudioBundleID = application?.bundleIdentifier
         selectedSystemAudioName = application?.name ?? "All Mac audio"
-        Task { await restartSystemAudioPreview() }
+        schedulePreviewRestart()
     }
 
     func setVideoEnabled(_ enabled: Bool) {
@@ -250,47 +241,66 @@ final class AppModel: ObservableObject {
 
     func panelDidOpen() {
         isPanelOpen = true
-        Task {
-            refreshApplications()
-            await startPreviewMonitoring()
-        }
+        refreshArchive()
+        refreshApplications()
+        schedulePreviewStart()
     }
 
     func panelDidClose() {
         isPanelOpen = false
         guard !isRecording else { return }
-        microphone.stopPreview()
-        capture.stopPreview()
+        schedulePreviewStop()
     }
 
-    func openArchive() {
-        guard !archiveRootPath.isEmpty else { phase = .failed(AppConfigurationError.archiveRoot.localizedDescription); return }
-        NSWorkspace.shared.open(URL(filePath: archiveRootPath, directoryHint: .isDirectory))
+    func settingsDidOpen() {
+        refreshArchive()
+        loadModels()
     }
 
-    func deleteMediaKeepingMarkdown() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.prompt = "Choose meeting"
-        if !archiveRootPath.isEmpty { panel.directoryURL = URL(filePath: archiveRootPath, directoryHint: .isDirectory) }
-        guard panel.runModal() == .OK, let directory = panel.url else { return }
-        let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: directory.appending(path: "transcript.md").path),
-              fileManager.fileExists(atPath: directory.appending(path: "summary.md").path)
-        else {
-            phase = .failed("Choose a completed meeting folder containing transcript.md and summary.md.")
+    func showArchiveInFinder() {
+        showInFinder(URL(filePath: archiveRootPath, directoryHint: .isDirectory))
+    }
+
+    func showInFinder(_ url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            showError("The folder no longer exists.")
             return
         }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func createProject() {
+        guard canManageArchive else { return }
         let alert = NSAlert()
-        alert.messageText = "Delete recorded media?"
-        alert.informativeText = "audio.m4a and screen.mov will be permanently deleted from \(directory.lastPathComponent). Markdown files will remain."
-        alert.addButton(withTitle: "Delete media")
+        alert.messageText = "New Project"
+        alert.informativeText = "Enter the folder name MeetingLog should use."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "Project name"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        for name in ["audio.m4a", "screen.mov"] {
-            let url = directory.appending(path: name)
-            if fileManager.fileExists(atPath: url.path) { try? fileManager.removeItem(at: url) }
+        do {
+            _ = try recordingStore().createProject(named: field.stringValue)
+            refreshArchive()
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
+    func deleteMeeting(_ meeting: ArchivedMeeting) {
+        guard canManageArchive else { return }
+        let alert = NSAlert()
+        alert.messageText = "Move meeting to Trash?"
+        alert.informativeText = "\(meeting.title)\nProject: \(meeting.projectName)\n\(meeting.url.path)"
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try FileManager.default.trashItem(at: meeting.url, resultingItemURL: nil)
+            refreshArchive()
+        } catch {
+            showError("The meeting was not deleted: \(error.localizedDescription)")
         }
     }
 
@@ -309,13 +319,14 @@ final class AppModel: ObservableObject {
     }
 
     private func startRecording() {
+        let generation = nextPreviewGeneration()
         Task {
             var startStore: ArchiveStore?
             do {
                 pendingCaptureFailure = nil
                 let store = try recordingStore()
                 startStore = store
-                stopPreviewMonitoring()
+                await stopPreviewMonitoring(generation: generation)
                 let recordsMicrophone = microphoneEnabled
                     && microphonePermission == .authorized
                     && !microphones.isEmpty
@@ -326,7 +337,7 @@ final class AppModel: ObservableObject {
                 currentDirectory = created.0
                 currentManifest = created.1
                 if recordsMicrophone {
-                    try microphone.startRecording(
+                    try await microphone.startRecording(
                         to: created.0.appending(path: "microphone.m4a"),
                         deviceID: selectedMicrophoneID
                     )
@@ -353,7 +364,7 @@ final class AppModel: ObservableObject {
                 pendingCaptureFailure = nil
                 phase = .failed(error.localizedDescription)
                 isChangingRecording = false
-                await startPreviewMonitoring()
+                schedulePreviewStart()
             }
         }
     }
@@ -383,7 +394,7 @@ final class AppModel: ObservableObject {
                 currentManifest = nil
                 phase = .failed(failure)
                 isChangingRecording = false
-                await startPreviewMonitoring()
+                schedulePreviewStart()
                 return
             }
 
@@ -398,7 +409,7 @@ final class AppModel: ObservableObject {
                     phase = .failed(error.localizedDescription)
                 }
                 isChangingRecording = false
-                await startPreviewMonitoring()
+                schedulePreviewStart()
                 return
             }
 
@@ -416,7 +427,7 @@ final class AppModel: ObservableObject {
                 currentManifest = nil
                 phase = .idle
                 isChangingRecording = false
-                await startPreviewMonitoring()
+                schedulePreviewStart()
                 await resumePendingSessions()
             } catch {
                 manifest.status = .failed
@@ -427,25 +438,31 @@ final class AppModel: ObservableObject {
                 processingFailureCount += 1
                 phase = .failed(error.localizedDescription)
                 isChangingRecording = false
-                await startPreviewMonitoring()
+                schedulePreviewStart()
             }
         }
     }
 
-    private func startPreviewMonitoring() async {
-        guard isPanelOpen, !isRecording else { return }
+    private func startPreviewMonitoring(generation: Int) async {
+        guard generation == previewGeneration, isPanelOpen, !isRecording else { return }
 
         if microphoneEnabled, microphonePermission == .notDetermined {
             _ = await AVCaptureDevice.requestAccess(for: .audio)
             microphonePermission = AVCaptureDevice.authorizationStatus(for: .audio)
         }
-        guard isPanelOpen, !isRecording else { return }
+        guard generation == previewGeneration, isPanelOpen, !isRecording else { return }
         if microphoneEnabled, microphonePermission == .authorized, !microphones.isEmpty {
-            do { try microphone.start(deviceID: selectedMicrophoneID) }
+            do {
+                try await microphone.setPreview(
+                    enabled: true,
+                    deviceID: selectedMicrophoneID,
+                    generation: generation
+                )
+            }
             catch { phase = .failed(error.localizedDescription) }
         }
 
-        guard isPanelOpen, !isRecording, selectedSystemAudioIsAvailable else { return }
+        guard generation == previewGeneration, isPanelOpen, !isRecording, selectedSystemAudioIsAvailable else { return }
         do {
             try await capture.startPreview(applicationBundleID: selectedSystemAudioBundleID)
             if systemAudioError != nil { phase = .idle }
@@ -456,22 +473,34 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func stopPreviewMonitoring() {
-        microphone.stopPreview()
+    private func stopPreviewMonitoring(generation: Int) async {
         capture.stopPreview()
+        try? await microphone.setPreview(enabled: false, deviceID: nil, generation: generation)
     }
 
-    private func restartSystemAudioPreview() async {
-        capture.stopPreview()
-        guard isPanelOpen, !isRecording, selectedSystemAudioIsAvailable else { return }
-        do {
-            try await capture.startPreview(applicationBundleID: selectedSystemAudioBundleID)
-            if systemAudioError != nil { phase = .idle }
-            systemAudioError = nil
-        } catch {
-            systemAudioError = error.localizedDescription
-            phase = .failed(error.localizedDescription)
+    private func schedulePreviewStart() {
+        let generation = nextPreviewGeneration()
+        Task { [weak self] in
+            await self?.startPreviewMonitoring(generation: generation)
         }
+    }
+
+    private func schedulePreviewStop() {
+        let generation = nextPreviewGeneration()
+        capture.stopPreview()
+        Task { [weak self] in
+            try? await self?.microphone.setPreview(enabled: false, deviceID: nil, generation: generation)
+        }
+    }
+
+    private func schedulePreviewRestart() {
+        capture.stopPreview()
+        schedulePreviewStart()
+    }
+
+    private func nextPreviewGeneration() -> Int {
+        previewGeneration += 1
+        return previewGeneration
     }
 
     private func refreshApplications() {
@@ -557,6 +586,7 @@ final class AppModel: ObservableObject {
             do {
                 let destination = try await process(job)
                 waitingForProcessingCount = max(0, waitingForProcessingCount - 1)
+                refreshArchive()
                 if !isRecording { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
             } catch {
                 if case OpenRouterError.authentication = error { keySaved = false }
@@ -611,9 +641,41 @@ final class AppModel: ObservableObject {
     }
 
     private func setArchiveRoot(_ url: URL) {
-        archiveRootPath = url.standardizedFileURL.path
-        UserDefaults.standard.set(archiveRootPath, forKey: ArchiveStore.rootDefaultsKey)
-        Task { await resumePendingSessions() }
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            archiveRootPath = url.standardizedFileURL.path
+            UserDefaults.standard.set(archiveRootPath, forKey: ArchiveStore.rootDefaultsKey)
+            refreshArchive()
+            Task { await resumePendingSessions() }
+        } catch {
+            showError("The archive folder could not be used: \(error.localizedDescription)")
+        }
+    }
+
+    private func refreshArchive() {
+        guard let store = try? recordingStore() else {
+            projects = []
+            recentMeetings = []
+            return
+        }
+        projects = (try? store.projects()) ?? []
+        recentMeetings = (try? store.recentMeetings()) ?? []
+    }
+
+    private var canManageArchive: Bool {
+        guard !isRecording, !isChangingRecording, !isProcessing else {
+            showError("Wait for recording and processing to finish.")
+            return false
+        }
+        return true
+    }
+
+    private func showError(_ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "MeetingLog"
+        alert.informativeText = message
+        alert.runModal()
     }
 
     private func openPrivacySettings(anchor: String) {

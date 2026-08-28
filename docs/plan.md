@@ -30,4 +30,10 @@ Use a compact timer-led panel with persistent Mac audio and microphone rows, opt
 
 **Exit proof:** the panel and Settings lifecycle pass a real app check in both system appearances.
 
+### 5. Project and recent meeting management: implemented
+
+Treat project folders as the source of truth, constrain AI allocation to existing projects or `Inbox`, use human-readable Unicode meeting folders, list the three most recent completed meetings, and move deleted meetings to Trash. Settings owns archive location and project creation; Finder and Obsidian own renaming and context editing.
+
+**Exit proof:** a new Unicode project receives a completed meeting under `meetings/MMddyyyy<title>`, Finder actions select their targets, and deleting a recent meeting moves its complete directory to Trash without exposing `.pending`.
+
 The code and signed app bundle pass local checks. A real five-minute recording remains the hardware and permission acceptance check because it requires the user's selected output route and privacy grants. OpenRouter is required only to verify post-recording processing.

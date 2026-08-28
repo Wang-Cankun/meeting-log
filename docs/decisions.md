@@ -9,7 +9,9 @@
 | Gemini 3.7 Flash | accepted | One configured OpenRouter key serves transcription and summary |
 | Five-minute blocks with ten-second overlap | accepted | Every block must succeed before final Markdown is written |
 | Transcript is evidence | accepted | Unsupported decisions are empty; unsupported context and reasons are empty strings |
-| Project-centered archive | accepted | The model infers ASCII project and title slugs and creates missing project directories |
+| Folder-owned projects | accepted | Users create Unicode project folders; the model selects an existing project or falls back to `Inbox` |
+| Human-readable meeting folders | accepted | New meetings use `MMddyyyy<title>` and numeric collision suffixes without migration of development archives |
+| Recoverable meeting deletion | accepted | The main panel lists three recent completed meetings and moves deleted meetings to the macOS Trash |
 | Markdown owns project context | accepted | `<project>/context.md` supplies names, jargon, aliases, and project-specific instructions |
 | Compressed media is retained | accepted | Temporary chunks are deleted only after the final archive succeeds |
 | Zero third-party packages | accepted | A new package requires an observed missing native capability |

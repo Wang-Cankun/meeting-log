@@ -56,10 +56,15 @@ struct MeetingProcessor {
                 ))
             }
             var choice = try decode(ProjectChoice.self, from: choiceText)
-            choice.projectSlug = ArchiveStore.slug(choice.projectSlug.isEmpty ? choice.projectName : choice.projectSlug)
-            if choice.projectName.isEmpty { choice.projectName = choice.projectSlug }
-            if choice.title.isEmpty { choice.title = "Meeting" }
-            let projectContext = projects.first { $0.slug == choice.projectSlug }?.markdown ?? ""
+            choice.title = ArchiveStore.meetingTitle(choice.title)
+            if let project = projects.first(where: {
+                $0.name.localizedCaseInsensitiveCompare(choice.projectName) == .orderedSame
+            }) {
+                choice.projectName = project.name
+            } else {
+                choice.projectName = try store.createProject(named: ArchiveStore.inboxName).name
+            }
+            let projectContext = try store.projectContexts().first { $0.name == choice.projectName }?.markdown ?? ""
 
             progress("Writing summary")
             let analysisText = try await retry {
@@ -73,26 +78,29 @@ struct MeetingProcessor {
             var analysis = try decode(MeetingAnalysis.self, from: analysisText)
             analysis.title = choice.title
             analysis.projectName = choice.projectName
-            analysis.projectSlug = choice.projectSlug
 
             try transcript.write(to: directory.appending(path: "transcript.md"), atomically: true, encoding: .utf8)
             try MarkdownRenderer.summary(analysis, startedAt: manifest.startedAt)
                 .write(to: directory.appending(path: "summary.md"), atomically: true, encoding: .utf8)
 
-            let screen = directory.appending(path: "screen.mov")
-            if manifest.videoEnabled, !FileManager.default.fileExists(atPath: screen.path) {
-                try FileManager.default.moveItem(at: capture, to: screen)
-            } else {
-                try FileManager.default.removeItem(at: capture)
-            }
-            try? FileManager.default.removeItem(at: directory.appending(path: "chunks"))
-            try? FileManager.default.removeItem(at: directory.appending(path: "coverage.json"))
-            try? FileManager.default.removeItem(at: directory.appending(path: "session.json"))
-            try? FileManager.default.removeItem(at: directory.appending(path: "system-audio.caf"))
-            try? FileManager.default.removeItem(at: directory.appending(path: "microphone.m4a"))
-
-            let destination = try store.finalDirectory(for: analysis, startedAt: manifest.startedAt)
+            let destination = try store.finalDirectory(
+                projectName: analysis.projectName,
+                title: analysis.title,
+                startedAt: manifest.startedAt
+            )
             try store.moveCompletedSession(from: directory, to: destination)
+            let archivedCapture = destination.appending(path: "capture.mov")
+            let screen = destination.appending(path: "screen.mov")
+            if manifest.videoEnabled, !FileManager.default.fileExists(atPath: screen.path) {
+                try? FileManager.default.moveItem(at: archivedCapture, to: screen)
+            } else {
+                try? FileManager.default.removeItem(at: archivedCapture)
+            }
+            try? FileManager.default.removeItem(at: destination.appending(path: "chunks"))
+            try? FileManager.default.removeItem(at: destination.appending(path: "coverage.json"))
+            try? FileManager.default.removeItem(at: destination.appending(path: "session.json"))
+            try? FileManager.default.removeItem(at: destination.appending(path: "system-audio.caf"))
+            try? FileManager.default.removeItem(at: destination.appending(path: "microphone.m4a"))
             progress("Complete")
             return destination
         } catch {

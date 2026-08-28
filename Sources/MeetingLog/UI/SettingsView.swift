@@ -5,7 +5,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Archive") {
+            Section("Archive Location") {
                 LabeledContent("Folder") {
                     Text(model.archiveRootPath)
                         .lineLimit(2)
@@ -13,15 +13,30 @@ struct SettingsView: View {
                         .textSelection(.enabled)
                 }
                 HStack {
-                    Button("Use Obsidian folder") { model.useObsidianArchive() }
-                    Button("Choose…") { model.chooseArchiveRoot() }
-                    Button("Open") { model.openArchive() }
+                    Button("Change") { model.chooseArchiveRoot() }
+                    Button("Show in Finder") { model.showArchiveInFinder() }
                     Spacer()
-                    Button("Delete archived media…", role: .destructive) {
-                        model.deleteMediaKeepingMarkdown()
-                    }
                 }
                 .disabled(model.isRecording || model.isProcessing)
+            }
+
+            Section("Projects") {
+                if model.projects.isEmpty {
+                    Text("No projects yet. Meetings without a matching project will use Inbox.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.projects) { project in
+                        HStack {
+                            Label(project.name, systemImage: "folder")
+                                .lineLimit(1)
+                            Spacer()
+                            Button("Show in Finder") { model.showInFinder(project.url) }
+                                .controlSize(.small)
+                        }
+                    }
+                }
+                Button("New Project…") { model.createProject() }
+                    .disabled(model.isRecording || model.isProcessing)
             }
 
             Section("AI processing") {
@@ -75,8 +90,8 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding(16)
-        .frame(width: 520, height: 400)
-        .onAppear { model.loadModels() }
+        .frame(width: 560, height: 500)
+        .onAppear { model.settingsDidOpen() }
     }
 
     private var providerStateText: String {

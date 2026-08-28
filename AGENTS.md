@@ -6,7 +6,7 @@
 - Support macOS 26 on Apple Silicon. Do not add compatibility branches without a real target device.
 - Preserve recorded media until compressed media and Markdown outputs are complete.
 - Treat the transcript as evidence. Summary fields must trace to transcript or project context.
-- Keep archive paths lowercase ASCII kebab-case; Markdown content may use Unicode.
+- Keep project and meeting folder names human-readable and Unicode-safe; reject filesystem control characters and reserve dot-prefixed names for app storage.
 
 ## Verification
 

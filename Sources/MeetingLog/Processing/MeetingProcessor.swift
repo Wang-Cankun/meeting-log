@@ -3,10 +3,10 @@ import Foundation
 @MainActor
 struct MeetingProcessor {
     let store: ArchiveStore
-    let client: OpenRouterClient
+    let client: ProviderClient
     var progress: @Sendable (String) -> Void = { _ in }
 
-    func process(directory: URL, manifest original: SessionManifest) async throws -> URL {
+    func process(directory: URL, manifest original: SessionManifest, projectName: String?) async throws -> URL {
         var manifest = original
         manifest.status = .processing
         manifest.lastError = nil
@@ -47,37 +47,27 @@ struct MeetingProcessor {
 
             let transcript = MarkdownRenderer.transcript(blocks: blocks)
             let projects = try store.projectContexts()
-            progress("Inferring project")
-            let choiceText = try await retry {
-                try await client.complete(prompt: Prompts.projectInference(
-                    transcript: transcript,
-                    globalContext: context,
-                    projectContexts: projects
-                ))
-            }
-            var choice = try decode(ProjectChoice.self, from: choiceText)
-            choice.title = ArchiveStore.meetingTitle(choice.title)
-            if let project = projects.first(where: {
-                $0.name.localizedCaseInsensitiveCompare(choice.projectName) == .orderedSame
-            }) {
-                choice.projectName = project.name
+            let resolvedProjectName: String
+            if let requested = projectName,
+               let match = projects.first(where: { $0.name.localizedCaseInsensitiveCompare(requested) == .orderedSame }) {
+                resolvedProjectName = match.name
             } else {
-                choice.projectName = try store.createProject(named: ArchiveStore.inboxName).name
+                resolvedProjectName = try store.createProject(named: ArchiveStore.inboxName).name
             }
-            let projectContext = try store.projectContexts().first { $0.name == choice.projectName }?.markdown ?? ""
+            let projectContext = projects.first { $0.name == resolvedProjectName }?.markdown ?? ""
 
             progress("Writing summary")
             let analysisText = try await retry {
                 try await client.complete(prompt: Prompts.analysis(
                     transcript: transcript,
                     globalContext: context,
-                    project: choice,
+                    projectName: resolvedProjectName,
                     projectContext: projectContext
                 ))
             }
             var analysis = try decode(MeetingAnalysis.self, from: analysisText)
-            analysis.title = choice.title
-            analysis.projectName = choice.projectName
+            analysis.title = ArchiveStore.meetingTitle(analysis.title)
+            analysis.projectName = resolvedProjectName
 
             try transcript.write(to: directory.appending(path: "transcript.md"), atomically: true, encoding: .utf8)
             try MarkdownRenderer.summary(analysis, startedAt: manifest.startedAt)

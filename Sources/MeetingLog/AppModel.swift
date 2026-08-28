@@ -23,12 +23,12 @@ final class AppModel: ObservableObject {
     @Published var videoEnabled = false
     @Published var microphoneEnabled = UserDefaults.standard.object(forKey: "microphoneEnabled") as? Bool ?? false
     @Published var selectedMicrophoneID = UserDefaults.standard.string(forKey: "microphoneID")
-    @Published var apiKey = ""
+    @Published var providerBaseURL = UserDefaults.standard.string(forKey: "providerBaseURL") ?? "https://openrouter.ai/api/v1"
+    @Published var apiKey = UserDefaults.standard.string(forKey: "providerAPIKey") ?? ""
     @Published var keySaved = false
     @Published var providerStatus: String?
     @Published var isVerifyingProvider = false
-    @Published var modelOptions: [OpenRouterModel] = []
-    @Published var selectedModelID = UserDefaults.standard.string(forKey: "openRouterModel") ?? OpenRouterClient.defaultModel
+    @Published var selectedModelID = UserDefaults.standard.string(forKey: "providerModel") ?? "google/gemini-3.7-flash"
     @Published var archiveRootPath = UserDefaults.standard.string(forKey: ArchiveStore.rootDefaultsKey) ?? AppModel.defaultArchiveURL.path
     @Published var applications: [CaptureApplication] = []
     @Published var selectedSystemAudioBundleID: String?
@@ -44,6 +44,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isChangingRecording = false
     @Published private(set) var projects: [ProjectFolder] = []
     @Published private(set) var recentMeetings: [ArchivedMeeting] = []
+    @Published var selectedProjectName = UserDefaults.standard.string(forKey: AppModel.projectDefaultsKey)
 
     let capture = CaptureService()
     let microphone = MicrophoneCapture()
@@ -59,8 +60,10 @@ final class AppModel: ObservableObject {
     private var isResumingPendingSessions = false
     private var pendingCaptureFailure: String?
 
+    private static let projectDefaultsKey = "selectedProjectName"
+
     init() {
-        keySaved = KeychainStore().containsKey()
+        keySaved = !apiKey.isEmpty
         UserDefaults.standard.set(archiveRootPath, forKey: ArchiveStore.rootDefaultsKey)
         try? FileManager.default.createDirectory(
             at: URL(filePath: archiveRootPath, directoryHint: .isDirectory),
@@ -124,6 +127,11 @@ final class AppModel: ObservableObject {
         return AudioLevelState(level: audioLevels.system).label
     }
 
+    var pendingMeetingsExist: Bool {
+        guard let store = try? recordingStore() else { return false }
+        return (try? store.hasPendingSessions()) ?? true
+    }
+
     var selectedSystemAudioIsAvailable: Bool {
         guard let selectedSystemAudioBundleID else { return true }
         return applications.contains { $0.bundleIdentifier == selectedSystemAudioBundleID }
@@ -142,17 +150,20 @@ final class AppModel: ObservableObject {
         setArchiveRoot(url)
     }
 
-    func saveAndVerifyKey() {
+    func testProviderConfiguration() {
         Task {
-            let value = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !value.isEmpty else { providerStatus = AppConfigurationError.apiKey.localizedDescription; return }
+            providerBaseURL = providerBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            selectedModelID = selectedModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !providerBaseURL.isEmpty, !selectedModelID.isEmpty, !apiKey.isEmpty else {
+                providerStatus = "Complete all provider fields."
+                return
+            }
             isVerifyingProvider = true
             defer { isVerifyingProvider = false }
             do {
-                try await OpenRouterClient(apiKey: value, model: selectedModelID).verifyKey()
-                try KeychainStore().save(value)
-                apiKey = ""
-                keySaved = true
+                try await providerClient().verifyConfiguration()
+                saveProviderConfiguration()
                 providerStatus = "Connected"
                 await resumePendingSessions()
             } catch {
@@ -161,44 +172,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func verifySavedKey() {
-        Task {
-            guard let key = try? KeychainStore().load(), !key.isEmpty else {
-                keySaved = false
-                providerStatus = "No API key saved"
-                return
-            }
-            isVerifyingProvider = true
-            defer { isVerifyingProvider = false }
-            do {
-                try await OpenRouterClient(apiKey: key, model: selectedModelID).verifyKey()
-                providerStatus = "Connected"
-            } catch {
-                providerStatus = error.localizedDescription
-            }
-        }
-    }
-
-    func removeKey() {
-        KeychainStore().delete()
+    func removeProviderConfiguration() {
+        providerBaseURL = "https://openrouter.ai/api/v1"
+        selectedModelID = "google/gemini-3.7-flash"
         apiKey = ""
         keySaved = false
-        providerStatus = "API key removed"
-    }
-
-    func loadModels() {
-        Task {
-            do {
-                modelOptions = try await OpenRouterClient.availableAudioModels()
-            } catch {
-                providerStatus = "Could not load models: \(error.localizedDescription)"
-            }
+        providerStatus = "Configuration removed"
+        for key in ["providerName", "providerBaseURL", "providerModel", "providerAPIKey"] {
+            UserDefaults.standard.removeObject(forKey: key)
         }
-    }
-
-    func selectModel(_ id: String) {
-        selectedModelID = id
-        UserDefaults.standard.set(id, forKey: "openRouterModel")
     }
 
     func selectMicrophone(_ id: String?) {
@@ -214,6 +196,15 @@ final class AppModel: ObservableObject {
             schedulePreviewStart()
         } else {
             schedulePreviewStop()
+        }
+    }
+
+    func selectProject(_ name: String?) {
+        selectedProjectName = name
+        if let name {
+            UserDefaults.standard.set(name, forKey: Self.projectDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.projectDefaultsKey)
         }
     }
 
@@ -254,7 +245,6 @@ final class AppModel: ObservableObject {
 
     func settingsDidOpen() {
         refreshArchive()
-        loadModels()
     }
 
     func showArchiveInFinder() {
@@ -281,11 +271,33 @@ final class AppModel: ObservableObject {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            _ = try recordingStore().createProject(named: field.stringValue)
+            let project = try recordingStore().createProject(named: field.stringValue)
+            selectProject(project.name)
             refreshArchive()
         } catch {
             showError(error.localizedDescription)
         }
+    }
+
+    func discardPendingMeetings() {
+        guard canManageArchive, let store = try? recordingStore() else { return }
+        let sessions = (try? store.pendingSessions()) ?? []
+        guard !sessions.isEmpty else { return }
+        let noun = sessions.count == 1 ? "meeting" : "meetings"
+        let alert = NSAlert()
+        alert.messageText = "Discard pending meetings?"
+        alert.informativeText = "\(sessions.count) unfinished \(noun) will be moved to the Trash and will no longer be processed."
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            for (directory, _) in sessions {
+                try FileManager.default.trashItem(at: directory, resultingItemURL: nil)
+            }
+        } catch {
+            showError("Pending meetings were not discarded: \(error.localizedDescription)")
+        }
+        refreshArchive()
     }
 
     func deleteMeeting(_ meeting: ArchivedMeeting) {
@@ -306,6 +318,7 @@ final class AppModel: ObservableObject {
 
     func toggleRecording() {
         guard let action = phase.recordingAction(isBusy: isChangingRecording) else { return }
+        phase = phase.clearingFailure
         isChangingRecording = true
         switch action {
         case .start: startRecording()
@@ -552,14 +565,16 @@ final class AppModel: ObservableObject {
             recoverable.append((directory, manifest))
         }
         waitingForProcessingCount = recoverable.count
-        guard let key = try? KeychainStore().load(), !key.isEmpty, !selectedModelID.isEmpty else { return }
+        guard keySaved, !selectedModelID.isEmpty else { return }
         for (directory, manifest) in recoverable {
             enqueue(ProcessingJob(
                 directory: directory,
                 manifest: manifest,
                 store: store,
-                key: key,
-                model: selectedModelID
+                baseURL: providerBaseURL,
+                key: apiKey,
+                model: selectedModelID,
+                projectName: selectedProjectName
             ))
         }
     }
@@ -589,7 +604,7 @@ final class AppModel: ObservableObject {
                 refreshArchive()
                 if !isRecording { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
             } catch {
-                if case OpenRouterError.authentication = error { keySaved = false }
+                if case ProviderError.authentication = error { keySaved = false }
                 processingFailureCount += 1
                 processingText = error.localizedDescription
             }
@@ -604,16 +619,31 @@ final class AppModel: ObservableObject {
         processingText = "Preparing"
         let processor = MeetingProcessor(
             store: job.store,
-            client: OpenRouterClient(apiKey: job.key, model: job.model)
+            client: ProviderClient(
+                baseURL: job.baseURL,
+                apiKey: job.key,
+                model: job.model
+            )
         ) { [weak self] text in
             Task { @MainActor in self?.processingText = text }
         }
-        return try await processor.process(directory: job.directory, manifest: job.manifest)
+        return try await processor.process(directory: job.directory, manifest: job.manifest, projectName: job.projectName)
     }
 
     private func recordingStore() throws -> ArchiveStore {
         guard !archiveRootPath.isEmpty else { throw AppConfigurationError.archiveRoot }
         return ArchiveStore(root: URL(filePath: archiveRootPath, directoryHint: .isDirectory))
+    }
+
+    private func providerClient() -> ProviderClient {
+        ProviderClient(baseURL: providerBaseURL, apiKey: apiKey, model: selectedModelID)
+    }
+
+    private func saveProviderConfiguration() {
+        UserDefaults.standard.set(providerBaseURL, forKey: "providerBaseURL")
+        UserDefaults.standard.set(selectedModelID, forKey: "providerModel")
+        UserDefaults.standard.set(apiKey, forKey: "providerAPIKey")
+        keySaved = true
     }
 
     private func handleCaptureError(_ message: String) {
@@ -629,15 +659,19 @@ final class AppModel: ObservableObject {
 
     private var canChangeArchive: Bool {
         guard !isRecording, !isChangingRecording, !isProcessing else {
-            phase = .failed("Wait for recording and processing to finish before changing the archive.")
+            fail("Wait for recording and processing to finish before changing the archive.")
             return false
         }
         let store = ArchiveStore(root: URL(filePath: archiveRootPath, directoryHint: .isDirectory))
-        guard (try? store.pendingSessions().isEmpty) != false else {
-            phase = .failed("Finish pending meetings before changing the archive.")
+        guard (try? store.hasPendingSessions()) == false else {
+            fail("Pending meetings exist.")
             return false
         }
         return true
+    }
+
+    private func fail(_ message: String) {
+        phase = .failed(message)
     }
 
     private func setArchiveRoot(_ url: URL) {
@@ -660,6 +694,10 @@ final class AppModel: ObservableObject {
         }
         projects = (try? store.projects()) ?? []
         recentMeetings = (try? store.recentMeetings()) ?? []
+        if let selected = selectedProjectName,
+           !projects.contains(where: { $0.name.localizedCaseInsensitiveCompare(selected) == .orderedSame }) {
+            selectProject(nil)
+        }
     }
 
     private var canManageArchive: Bool {
@@ -691,8 +729,10 @@ private struct ProcessingJob {
     let directory: URL
     let manifest: SessionManifest
     let store: ArchiveStore
+    let baseURL: String
     let key: String
     let model: String
+    let projectName: String?
 }
 
 enum AppConfigurationError: LocalizedError {
@@ -702,7 +742,7 @@ enum AppConfigurationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .archiveRoot: "Choose an archive folder first."
-        case .apiKey: "Save an OpenRouter API key first."
+        case .apiKey: "Save an API provider configuration first."
         }
     }
 }

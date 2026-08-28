@@ -18,6 +18,8 @@ struct ControlPanel: View {
             audioSources
             Divider()
             screenRow
+            Divider()
+            projectRow
             if showsProcessingStatus {
                 Divider()
                 processingStatus
@@ -30,16 +32,17 @@ struct ControlPanel: View {
         }
         .foregroundStyle(.primary)
         .background(Color(nsColor: .windowBackgroundColor))
-        .frame(width: 360)
+        .frame(width: 380)
         .onAppear { model.panelDidOpen() }
         .onDisappear { model.panelDidClose() }
     }
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: model.isRecording ? "record.circle.fill" : "circle")
+            Image(systemName: headerSymbol)
                 .font(.title2)
-                .foregroundStyle(model.isRecording ? Color.red : Color.secondary.opacity(0.5))
+                .foregroundStyle(headerSymbolColor)
+                .contentTransition(.symbolEffect(.replace))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 if case let .recording(startedAt) = model.phase {
@@ -52,7 +55,7 @@ struct ControlPanel: View {
                 }
                 Text(model.statusText)
                     .font(.caption)
-                    .foregroundStyle(model.isRecording ? .red : .secondary)
+                    .foregroundStyle(headerStatusColor)
                     .lineLimit(1)
             }
             Spacer()
@@ -60,6 +63,21 @@ struct ControlPanel: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .accessibilityElement(children: .combine)
+    }
+
+    private var headerSymbol: String {
+        if case .failed = model.phase { return "exclamationmark.triangle" }
+        return model.isRecording ? "record.circle.fill" : "waveform"
+    }
+
+    private var headerSymbolColor: Color {
+        if case .failed = model.phase { return .orange }
+        return model.isRecording ? .red : .secondary
+    }
+
+    private var headerStatusColor: Color {
+        if case .failed = model.phase { return .orange }
+        return model.isRecording ? .red : .secondary
     }
 
     private var audioSources: some View {
@@ -85,7 +103,12 @@ struct ControlPanel: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 6)
-                systemAudioMenu
+                HStack(spacing: 10) {
+                    systemAudioMenu
+                        .frame(width: 108, alignment: .trailing)
+                    Color.clear.frame(width: 54)
+                }
+                .frame(width: 172)
             }
             LevelMeter(
                 source: "Mac audio",
@@ -129,9 +152,11 @@ struct ControlPanel: View {
         } label: {
             Text(model.selectedSystemAudioBundleID == nil ? "All apps" : model.selectedSystemAudioName)
                 .lineLimit(1)
-                .frame(maxWidth: 128, alignment: .trailing)
+                .truncationMode(.middle)
+                .frame(width: 88, alignment: .leading)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .controlSize(.small)
         .disabled(model.isRecording || model.isChangingRecording)
         .accessibilityLabel("Mac audio source")
     }
@@ -151,28 +176,37 @@ struct ControlPanel: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                if model.microphoneEnabled {
-                    Menu {
-                        Button("System default") { model.selectMicrophone(nil) }
-                        ForEach(model.microphones, id: \.uniqueID) { device in
-                            Button(device.localizedName) { model.selectMicrophone(device.uniqueID) }
+                HStack(spacing: 10) {
+                    if model.microphoneEnabled {
+                        Menu {
+                            Button("System default") { model.selectMicrophone(nil) }
+                            ForEach(model.microphones, id: \.uniqueID) { device in
+                                Button(device.localizedName) { model.selectMicrophone(device.uniqueID) }
+                            }
+                        } label: {
+                            Text(selectedMicrophoneName)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(width: 88, alignment: .leading)
                         }
-                    } label: {
-                        Text(selectedMicrophoneName)
-                            .lineLimit(1)
-                            .frame(maxWidth: 104, alignment: .trailing)
+                        .menuStyle(.button)
+                        .controlSize(.small)
+                        .disabled(model.isRecording || model.isChangingRecording)
+                        .accessibilityLabel("Microphone device")
+                        .frame(width: 108, alignment: .trailing)
+                    } else {
+                        Color.clear
                     }
-                    .menuStyle(.borderlessButton)
+                    Toggle("Include microphone", isOn: Binding(
+                        get: { model.microphoneEnabled },
+                        set: { model.setMicrophoneEnabled($0) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
                     .disabled(model.isRecording || model.isChangingRecording)
-                    .accessibilityLabel("Microphone device")
+                    .frame(width: 54)
                 }
-                Toggle("Include microphone", isOn: Binding(
-                    get: { model.microphoneEnabled },
-                    set: { model.setMicrophoneEnabled($0) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .disabled(model.isRecording || model.isChangingRecording)
+                .frame(width: 172)
             }
             LevelMeter(
                 source: "Microphone",
@@ -209,21 +243,88 @@ struct ControlPanel: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 6)
-            if model.videoEnabled {
-                Button(model.hasScreenSource ? "Change…" : "Choose…") { model.chooseScreen() }
-                    .controlSize(.small)
-                    .disabled(model.isRecording || model.isChangingRecording)
+            HStack(spacing: 10) {
+                if model.videoEnabled {
+                    Button(model.hasScreenSource ? "Change…" : "Choose…") { model.chooseScreen() }
+                        .controlSize(.small)
+                        .frame(width: 108, alignment: .trailing)
+                        .disabled(model.isRecording || model.isChangingRecording)
+                } else {
+                    Color.clear
+                }
+                Toggle("Record screen", isOn: Binding(
+                    get: { model.videoEnabled },
+                    set: { model.setVideoEnabled($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(model.isRecording || model.isChangingRecording)
+                .frame(width: 54)
             }
-            Toggle("Record screen", isOn: Binding(
-                get: { model.videoEnabled },
-                set: { model.setVideoEnabled($0) }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .disabled(model.isRecording || model.isChangingRecording)
+            .frame(width: 172)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private var projectRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "folder")
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Save to project").font(.body.weight(.medium))
+                Text("Applied when recording stops")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            HStack(spacing: 10) {
+                projectMenu
+                    .frame(width: 108, alignment: .trailing)
+                Color.clear.frame(width: 54)
+            }
+            .frame(width: 172)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var projectMenu: some View {
+        Menu {
+            Button { model.selectProject(nil) } label: {
+                if model.selectedProjectName == nil {
+                    Label("Inbox", systemImage: "checkmark")
+                } else {
+                    Text("Inbox")
+                }
+            }
+            let listed = model.projects.filter {
+                $0.name.localizedCaseInsensitiveCompare(ArchiveStore.inboxName) != .orderedSame
+            }
+            if !listed.isEmpty {
+                Divider()
+                ForEach(listed) { project in
+                    Button { model.selectProject(project.name) } label: {
+                        if model.selectedProjectName == project.name {
+                            Label(project.name, systemImage: "checkmark")
+                        } else {
+                            Text(project.name)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text(model.selectedProjectName ?? "Inbox")
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(width: 88, alignment: .leading)
+        }
+        .menuStyle(.button)
+        .controlSize(.small)
+        .accessibilityLabel("Project for new meetings")
     }
 
     private var showsProcessingStatus: Bool {
@@ -268,7 +369,7 @@ struct ControlPanel: View {
         if let text = model.processingText { return text }
         guard model.waitingForProcessingCount > 0 else { return nil }
         let noun = model.waitingForProcessingCount == 1 ? "recording" : "recordings"
-        if !model.keySaved { return "Add an OpenRouter key to process \(model.waitingForProcessingCount) \(noun)." }
+        if !model.keySaved { return "Configure an AI provider to process \(model.waitingForProcessingCount) \(noun)." }
         return "\(model.waitingForProcessingCount) \(noun) waiting."
     }
 
@@ -282,7 +383,7 @@ struct ControlPanel: View {
         Button { model.toggleRecording() } label: {
             Label(
                 model.isRecording ? "Stop recording" : "Record",
-                systemImage: model.isRecording ? "stop.circle.fill" : "record.circle"
+                systemImage: model.isRecording ? "stop.circle.fill" : "record.circle.fill"
             )
             .font(.body.weight(.semibold))
             .frame(minWidth: 140)
@@ -348,10 +449,16 @@ struct ControlPanel: View {
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 10) {
             Spacer()
             Button("Settings") { showSettings() }
-            Button("Quit") { NSApplication.shared.terminate(nil) }
+                .padding(.vertical, 4)
+            Divider().frame(height: 12)
+            Button(role: .destructive) { NSApplication.shared.terminate(nil) } label: {
+                Text("Quit")
+                    .padding(.vertical, 4)
+            }
+            .help("Quit MeetingLog")
         }
         .buttonStyle(.plain)
         .font(.caption)

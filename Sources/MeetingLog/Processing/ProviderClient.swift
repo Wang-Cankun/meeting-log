@@ -1,36 +1,21 @@
 import Foundation
 
-struct OpenRouterModel: Decodable, Identifiable, Equatable {
-    let id: String
-    let name: String
-}
-
-struct OpenRouterClient {
-    static let defaultModel = "google/gemini-3.7-flash"
-    private static let endpoint = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+struct ProviderClient {
+    let baseURL: String
     let apiKey: String
     let model: String
 
-    func verifyKey() async throws {
-        var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/key")!)
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw OpenRouterError.invalidResponse }
-        guard (200..<300).contains(http.statusCode) else {
-            throw http.statusCode == 401 || http.statusCode == 403
-                ? OpenRouterError.authentication
-                : OpenRouterError.request("OpenRouter returned HTTP \(http.statusCode).")
+    var endpoint: URL {
+        get throws {
+            guard let root = URL(string: baseURL), root.scheme == "https", root.host != nil else {
+                throw ProviderError.configuration("Provider URL must be a valid HTTPS URL.")
+            }
+            return root.appending(path: "chat/completions")
         }
     }
 
-    static func availableAudioModels() async throws -> [OpenRouterModel] {
-        let url = URL(string: "https://openrouter.ai/api/v1/models?input_modalities=audio&output_modalities=text")!
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw OpenRouterError.invalidResponse
-        }
-        return try JSONDecoder().decode(ModelEnvelope.self, from: data).data
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    func verifyConfiguration() async throws {
+        _ = try await complete(prompt: "Reply with OK.")
     }
 
     func transcribe(audio: URL, prompt: String) async throws -> String {
@@ -46,41 +31,35 @@ struct OpenRouterClient {
     }
 
     func complete(prompt: String) async throws -> String {
-        let body = ChatRequest(
+        try await send(ChatRequest(
             model: model,
             messages: [.init(role: "user", content: [.text(prompt)])],
             temperature: 0
-        )
-        return try await send(body)
+        ))
     }
 
     private func send(_ body: ChatRequest) async throws -> String {
-        var request = URLRequest(url: Self.endpoint)
+        var request = URLRequest(url: try endpoint)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("MeetingLog", forHTTPHeaderField: "X-OpenRouter-Title")
         request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw OpenRouterError.invalidResponse }
+        guard let http = response as? HTTPURLResponse else { throw ProviderError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
-            if http.statusCode == 401 || http.statusCode == 403 { throw OpenRouterError.authentication }
+            if http.statusCode == 401 || http.statusCode == 403 { throw ProviderError.authentication }
             let message = (try? JSONDecoder().decode(APIErrorEnvelope.self, from: data).error.message)
                 ?? String(data: data, encoding: .utf8)
                 ?? "HTTP \(http.statusCode)"
-            throw OpenRouterError.request(message)
+            throw ProviderError.request(message)
         }
         let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
         guard let content = decoded.choices.first?.message.content, !content.isEmpty else {
-            throw OpenRouterError.invalidResponse
+            throw ProviderError.invalidResponse
         }
         return content
     }
-}
-
-private struct ModelEnvelope: Decodable {
-    let data: [OpenRouterModel]
 }
 
 private struct ChatRequest: Encodable {
@@ -124,16 +103,17 @@ private struct APIErrorEnvelope: Decodable {
     let error: APIError
 }
 
-enum OpenRouterError: LocalizedError {
+enum ProviderError: LocalizedError {
+    case configuration(String)
     case invalidResponse
     case authentication
     case request(String)
 
     var errorDescription: String? {
         switch self {
-        case .invalidResponse: "OpenRouter returned an invalid response."
-        case .authentication: "OpenRouter rejected the saved API key."
-        case let .request(message): message
+        case let .configuration(message), let .request(message): message
+        case .invalidResponse: "The provider returned an invalid response."
+        case .authentication: "The provider rejected the API key."
         }
     }
 }

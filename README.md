@@ -1,12 +1,12 @@
 # MeetingLog
 
-MeetingLog is a personal macOS menu bar app that records all Mac audio or one application's audio, optionally includes a microphone and screen video, and turns each session into an archived transcript and evidence-bound summary. Recording works without an OpenRouter key; processing waits locally until one is configured.
+MeetingLog is a personal macOS menu bar app that records all Mac audio or one application's audio, optionally includes a microphone and screen video, and turns each session into an archived transcript and evidence-bound summary. Recording works without an AI provider; processing waits locally until one is configured.
 
 ## Start here
 
 1. Run `scripts/build-app.sh` on macOS 26 or later.
 2. Open `.build/MeetingLog.app`.
-3. Open Settings to choose an archive root and create project folders. Add an OpenRouter model and API key when transcription is needed.
+3. Open Settings to choose an archive root and create project folders, then pick the destination project in the menu bar panel. Configure the AI provider in Settings when transcription is needed.
 4. Grant system-audio permission. Grant microphone or screen-recording permission only when enabling those sources.
 
 ## Routes

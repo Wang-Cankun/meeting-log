@@ -23,9 +23,25 @@ precondition(AudioLevelState(level: 0.03) == .active)
 precondition(AudioLevelState(level: 0.82) == .high)
 precondition(AudioLevelState(level: 0.96) == .clipping)
 
+let provider = ProviderClient(
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: "test",
+    model: "test"
+)
+let providerEndpoint = try provider.endpoint
+precondition(providerEndpoint.absoluteString == "https://openrouter.ai/api/v1/chat/completions")
+do {
+    _ = try ProviderClient(baseURL: "http://localhost", apiKey: "test", model: "test").endpoint
+    preconditionFailure("Provider URLs must use HTTPS")
+} catch {}
+
 precondition(AppPhase.idle.recordingAction(isBusy: false) == .start)
 precondition(AppPhase.recording(startedAt: Date()).recordingAction(isBusy: false) == .stop)
 precondition(AppPhase.idle.recordingAction(isBusy: true) == nil)
+precondition(AppPhase.failed("x").clearingFailure == .idle)
+precondition(AppPhase.idle.clearingFailure == .idle)
+let clearingRecordingDate = Date(timeIntervalSince1970: 0)
+precondition(AppPhase.recording(startedAt: clearingRecordingDate).clearingFailure == .recording(startedAt: clearingRecordingDate))
 precondition(!RecordingDurationPolicy.shouldProcess(
     startedAt: Date(timeIntervalSince1970: 0),
     stoppedAt: Date(timeIntervalSince1970: 9.999)
@@ -70,8 +86,18 @@ precondition(MediaProcessor.pendingInput(in: interruptedDirectory) == .raw(
 ))
 
 let discardStore = ArchiveStore(root: compatibilityRoot)
+let noPendingBeforeCreate = try discardStore.hasPendingSessions()
+let pendingListBeforeCreate = try discardStore.pendingSessions()
+precondition(!noPendingBeforeCreate)
+precondition(pendingListBeforeCreate.isEmpty)
 let discardedSession = try discardStore.createPendingSession(videoEnabled: false, microphoneID: nil)
+let pendingAfterCreate = try discardStore.hasPendingSessions()
+let pendingListAfterCreate = try discardStore.pendingSessions()
+precondition(pendingAfterCreate)
+precondition(pendingListAfterCreate.count == 1)
 try discardStore.discardPendingSession(id: discardedSession.1.id)
+let pendingAfterDiscard = try discardStore.hasPendingSessions()
+precondition(!pendingAfterDiscard)
 precondition(!FileManager.default.fileExists(atPath: discardedSession.0.path))
 try FileManager.default.removeItem(at: compatibilityRoot)
 print("MeetingLog check passed")

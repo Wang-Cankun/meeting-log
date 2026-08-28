@@ -52,11 +52,6 @@ struct MeetingAnalysis: Codable, Equatable {
     var keyTopics: [String]
 }
 
-struct ProjectChoice: Codable, Equatable {
-    var title: String
-    var projectName: String
-}
-
 struct ProjectContext: Equatable {
     let name: String
     let markdown: String
@@ -87,6 +82,11 @@ enum AppPhase: Equatable {
         guard !isBusy else { return nil }
         if case .recording = self { return .stop }
         return .start
+    }
+
+    var clearingFailure: AppPhase {
+        if case .failed = self { return .idle }
+        return self
     }
 }
 

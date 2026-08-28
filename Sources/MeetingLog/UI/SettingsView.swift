@@ -5,8 +5,80 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("AI provider") {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Base URL").font(.subheadline.weight(.medium))
+                        Text("The root URL for an OpenAI-compatible API.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("https://openrouter.ai/api/v1", text: $model.providerBaseURL)
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .font(.body.monospaced())
+                    }
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Model ID").font(.subheadline.weight(.medium))
+                        Text("Must accept audio input and return text.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("google/gemini-3.7-flash", text: $model.selectedModelID)
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .font(.body.monospaced())
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section("Authentication") {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("API key").font(.subheadline.weight(.medium))
+                        SecureField("Required", text: $model.apiKey)
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .font(.body.monospaced())
+                    }
+
+                    if model.isVerifyingProvider {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Verifying configuration…")
+                        }
+                        .foregroundStyle(.secondary)
+                    } else {
+                        Label(providerStateText, systemImage: providerStateSymbol)
+                            .foregroundStyle(providerStateColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    HStack {
+                        Spacer()
+                        if model.keySaved {
+                            Button("Remove configuration", role: .destructive) {
+                                model.removeProviderConfiguration()
+                            }
+                            .disabled(model.isRecording)
+                        }
+                        Button("Test connection") {
+                            model.testProviderConfiguration()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!providerConfigurationComplete || model.isVerifyingProvider || model.isRecording)
+                    }
+
+                    Text("The API key is stored unencrypted in this Mac user's app preferences. Recording works without it; processing waits until a configuration is available.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 4)
+            }
+
             Section("Archive Location") {
-                LabeledContent("Folder") {
+                LabeledContent("Archive folder") {
                     Text(model.archiveRootPath)
                         .lineLimit(2)
                         .truncationMode(.middle)
@@ -14,92 +86,45 @@ struct SettingsView: View {
                 }
                 HStack {
                     Button("Change") { model.chooseArchiveRoot() }
+                        .disabled(model.pendingMeetingsExist)
                     Button("Show in Finder") { model.showArchiveInFinder() }
+                    Button("New Project…") { model.createProject() }
                     Spacer()
                 }
                 .disabled(model.isRecording || model.isProcessing)
-            }
-
-            Section("Projects") {
-                if model.projects.isEmpty {
-                    Text("No projects yet. Meetings without a matching project will use Inbox.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.projects) { project in
-                        HStack {
-                            Label(project.name, systemImage: "folder")
-                                .lineLimit(1)
-                            Spacer()
-                            Button("Show in Finder") { model.showInFinder(project.url) }
-                                .controlSize(.small)
-                        }
+                if model.pendingMeetingsExist {
+                    HStack {
+                        Text("Finish pending meetings before changing the archive.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Discard Pending…", role: .destructive) { model.discardPendingMeetings() }
+                            .controlSize(.small)
                     }
                 }
-                Button("New Project…") { model.createProject() }
-                    .disabled(model.isRecording || model.isProcessing)
-            }
-
-            Section("AI processing") {
-                Picker("Model", selection: Binding(
-                    get: { model.selectedModelID },
-                    set: { model.selectModel($0) }
-                )) {
-                    if !model.modelOptions.contains(where: { $0.id == model.selectedModelID }) {
-                        Text(model.selectedModelID).tag(model.selectedModelID)
-                    }
-                    ForEach(model.modelOptions) { option in
-                        Text(option.name).tag(option.id)
-                    }
-                }
-                .disabled(model.isRecording)
-
-                HStack {
-                    SecureField(
-                        model.keySaved ? "Replace saved API key" : "OpenRouter API key",
-                        text: $model.apiKey
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    Button(model.isVerifyingProvider ? "Verifying…" : "Save and verify") {
-                        model.saveAndVerifyKey()
-                    }
-                    .disabled(
-                        model.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || model.isVerifyingProvider
-                        || model.isRecording
-                    )
-                }
-
-                HStack {
-                    Label(
-                        providerStateText,
-                        systemImage: providerStateSymbol
-                    )
-                    .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Verify") { model.verifySavedKey() }
-                        .disabled(!model.keySaved || model.isVerifyingProvider)
-                    Button("Remove", role: .destructive) { model.removeKey() }
-                        .disabled(!model.keySaved || model.isRecording)
-                }
-
-                Text("Recording works without an API key. MeetingLog sends compressed audio to OpenRouter only after recording stops.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
         .padding(16)
-        .frame(width: 560, height: 500)
+        .frame(width: 600, height: 600)
         .onAppear { model.settingsDidOpen() }
     }
 
     private var providerStateText: String {
-        model.providerStatus ?? (model.keySaved ? "API key stored in Keychain" : "API key required for transcription")
+        model.providerStatus ?? (model.keySaved ? "Configuration saved" : "Configuration required for transcription")
     }
 
     private var providerStateSymbol: String {
         if model.providerStatus == nil { return model.keySaved ? "checkmark.circle" : "exclamationmark.circle" }
         return model.providerStatus == "Connected" ? "checkmark.circle" : "exclamationmark.circle"
+    }
+
+    private var providerStateColor: Color {
+        model.providerStatus == "Connected" ? .green : .secondary
+    }
+
+    private var providerConfigurationComplete: Bool {
+        [model.providerBaseURL, model.selectedModelID, model.apiKey]
+            .allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 }

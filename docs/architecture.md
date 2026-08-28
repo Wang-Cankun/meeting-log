@@ -15,8 +15,8 @@ menu bar panel
   -> system audio + microphone mixdown to compatible capture.mov
   -> compressed audio + optional HEVC video
   -> five-minute audio blocks
-  -> Gemini transcription coverage gate
-  -> project/title inference + evidence-bound summary
+  -> configured OpenAI-compatible provider transcription coverage gate
+  -> evidence-bound summary in the selected project
   -> project/meetings/session archive
 ```
 
@@ -25,8 +25,8 @@ menu bar panel
 | Component | Owns | Must not own |
 |---|---|---|
 | `Capture` | Core Audio system-audio scope, screen picker, microphone and media capture | prompts or archive naming |
-| `Processing` | chunking, OpenRouter requests, coverage, transcript and summary | UI or permanent root selection |
-| `Storage` | Keychain, pending sessions, project folders, final archive writes | capture lifecycle |
+| `Processing` | chunking, configured provider requests, coverage, transcript and summary | UI or permanent root selection |
+| `Storage` | app preferences, pending sessions, project folders, final archive writes | capture lifecycle |
 | `UI` | menu bar controls and visible state | media or network implementation |
 | `Models` | persisted and API boundary types | orchestration |
 
@@ -44,9 +44,9 @@ menu bar panel
         screen.mov        # only when video was enabled
 ```
 
-Incomplete sessions remain under `<root>/.pending/<uuid>/` with `session.json`. Startup recovery resumes processing from that manifest.
+Incomplete sessions remain under `<root>/.pending/<uuid>/` with `session.json`. Startup recovery resumes processing from that manifest. Pending sessions block archive relocation until they finish; Settings can move them to the Trash when they are no longer wanted.
 
-Project folders are the source of truth and may use Unicode names. Users create projects; project inference selects an existing folder or uses `Inbox`. Completed meeting folders use the recording start date followed immediately by the human-readable title, with `-2`, `-3`, and later suffixes for collisions. The menu panel lists the three most recent completed meetings; deletion moves the complete meeting directory to the macOS Trash.
+Project folders are the source of truth and may use Unicode names. Users create projects; the menu bar panel selects the destination project for each recording, falling back to `Inbox` when nothing valid is selected. Completed meeting folders use the recording start date followed immediately by the human-readable title, with `-2`, `-3`, and later suffixes for collisions. The menu panel lists the three most recent completed meetings; deletion moves the complete meeting directory to the macOS Trash.
 
 System audio uses a private Core Audio process tap and aggregate device. All Mac audio is the default; one running application can be selected by bundle identifier. The tap handles preview and writes `system-audio.caf` during recording without using the screen picker.
 

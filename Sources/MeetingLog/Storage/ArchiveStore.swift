@@ -53,6 +53,10 @@ struct ArchiveStore {
         }
     }
 
+    func hasPendingSessions() throws -> Bool {
+        try !pendingSessions().isEmpty
+    }
+
     func projects() throws -> [ProjectFolder] {
         guard fileManager.fileExists(atPath: root.path) else { return [] }
         return try fileManager.contentsOfDirectory(

@@ -15,6 +15,13 @@ struct MeetingLogApp: App {
         }
         .menuBarExtraStyle(.window)
 
+        Window("Import Audio", id: "import-audio") {
+            ImportAudioView(model: model)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .defaultLaunchBehavior(.suppressed)
+
         Settings {
             SettingsView(model: model)
         }

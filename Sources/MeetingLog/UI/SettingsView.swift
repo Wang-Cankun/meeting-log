@@ -2,129 +2,304 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @State private var page = SettingsPage.library
+    @State private var showingProject = false
+    @State private var baseURL = ""
+    @State private var modelID = ""
+    @State private var key = ""
+    @State private var testResult: String?
+    @State private var confirmingRemoval = false
+    @State private var showingDetails = false
+
+    private enum SettingsPage: String, CaseIterable {
+        case library = "Projects & storage"
+        case provider = "AI processing"
+    }
 
     var body: some View {
-        Form {
-            Section("AI provider") {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Base URL").font(.subheadline.weight(.medium))
-                        Text("The root URL for an OpenAI-compatible API.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("https://openrouter.ai/api/v1", text: $model.providerBaseURL)
-                            .labelsHidden()
-                            .textFieldStyle(.roundedBorder)
-                            .font(.body.monospaced())
-                    }
+        VStack(spacing: 0) {
+            Picker("Settings section", selection: $page) {
+                ForEach(SettingsPage.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 320)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
 
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Model ID").font(.subheadline.weight(.medium))
-                        Text("Must accept audio input and return text.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("google/gemini-3.7-flash", text: $model.selectedModelID)
-                            .labelsHidden()
-                            .textFieldStyle(.roundedBorder)
-                            .font(.body.monospaced())
+            if page == .library {
+                Form { library }
+                    .formStyle(.grouped)
+            } else {
+                ScrollView {
+                    provider
+                        .padding(.horizontal, 28)
+                        .padding(.top, 8)
+                        .padding(.bottom, 24)
+                }
+            }
+        }
+        .frame(width: 600, height: 570)
+        .onAppear {
+            model.settingsDidOpen()
+            loadSavedProvider()
+        }
+        .sheet(isPresented: $showingProject) { NewProjectSheet(model: model) }
+        .confirmationDialog("Remove the saved AI configuration?", isPresented: $confirmingRemoval) {
+            Button("Remove configuration", role: .destructive) {
+                model.removeProviderConfiguration()
+                loadSavedProvider()
+                testResult = nil
+            }
+        } message: {
+            Text("Existing meetings stay in your archive. New recordings will wait locally until you configure a provider again.")
+        }
+    }
+
+    private var library: some View {
+        Group {
+            Section {
+                HStack {
+                    Text("Projects").font(.headline)
+                    Spacer()
+                    Button("New project…", systemImage: "plus") { showingProject = true }
+                }
+                if model.projects.isEmpty {
+                    Text("Create a project to keep related meetings together. Otherwise, meetings go to Inbox.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(model.projects) { project in
+                    HStack(spacing: 10) {
+                        Image(systemName: "folder").foregroundStyle(.secondary)
+                        Text(project.name).lineLimit(2)
+                        Spacer()
+                        if model.selectedProjectName == project.name {
+                            Text("Selected").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Button("Open", systemImage: "arrow.up.right") { model.showInFinder(project.url) }
+                            .labelStyle(.iconOnly)
+                            .help("Open \(project.name) in Finder")
                     }
                 }
-                .padding(.vertical, 4)
+            } footer: {
+                Text("Choose a project when recording or importing. Rename project folders in Finder.")
             }
 
-            Section("Authentication") {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("API key").font(.subheadline.weight(.medium))
-                        SecureField("Required", text: $model.apiKey)
-                            .labelsHidden()
-                            .textFieldStyle(.roundedBorder)
-                            .font(.body.monospaced())
-                    }
-
-                    if model.isVerifyingProvider {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("Verifying configuration…")
-                        }
-                        .foregroundStyle(.secondary)
-                    } else {
-                        Label(providerStateText, systemImage: providerStateSymbol)
-                            .foregroundStyle(providerStateColor)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    HStack {
-                        Spacer()
-                        if model.keySaved {
-                            Button("Remove configuration", role: .destructive) {
-                                model.removeProviderConfiguration()
-                            }
-                            .disabled(model.isRecording)
-                        }
-                        Button("Test connection") {
-                            model.testProviderConfiguration()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!providerConfigurationComplete || model.isVerifyingProvider || model.isRecording)
-                    }
-
-                    Text("The API key is stored unencrypted in this Mac user's app preferences. Recording works without it; processing waits until a configuration is available.")
-                        .font(.caption)
+            Section("Storage") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Meeting archive").font(.subheadline.weight(.medium))
+                    Text(model.archiveRootPath)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 4)
-            }
-
-            Section("Archive Location") {
-                LabeledContent("Archive folder") {
-                    Text(model.archiveRootPath)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
                         .textSelection(.enabled)
-                }
-                HStack {
-                    Button("Change") { model.chooseArchiveRoot() }
-                        .disabled(model.pendingMeetingsExist)
-                    Button("Show in Finder") { model.showArchiveInFinder() }
-                    Button("New Project…") { model.createProject() }
-                    Spacer()
-                }
-                .disabled(model.isRecording || model.isProcessing)
-                if model.pendingMeetingsExist {
                     HStack {
-                        Text("Finish pending meetings before changing the archive.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Button("Open in Finder") { model.showArchiveInFinder() }
                         Spacer()
-                        Button("Discard Pending…", role: .destructive) { model.discardPendingMeetings() }
-                            .controlSize(.small)
+                        Button("Change folder…") { model.chooseArchiveRoot() }
+                            .disabled(archiveBusy || model.pendingMeetingsExist)
+                    }
+                }
+                if model.pendingMeetingsExist {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Some recordings are waiting for processing. Finish them before changing the archive folder.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Move pending recordings to Trash…", role: .destructive) { model.discardPendingMeetings() }
+                            .disabled(archiveBusy)
                     }
                 }
             }
         }
-        .formStyle(.grouped)
-        .padding(16)
-        .frame(width: 600, height: 600)
-        .onAppear { model.settingsDidOpen() }
     }
 
-    private var providerStateText: String {
-        model.providerStatus ?? (model.keySaved ? "Configuration saved" : "Configuration required for transcription")
+    private var provider: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("AI provider").font(.title2.weight(.semibold))
+                Text("Connect a provider to transcribe audio and write meeting summaries.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 18) {
+                field("API base URL", hint: "OpenAI-compatible HTTPS endpoint") {
+                    TextField("", text: draft($baseURL),
+                              prompt: Text("https://openrouter.ai/api/v1"))
+                }
+                field("Model", hint: "Must support audio input.") {
+                    TextField("", text: draft($modelID),
+                              prompt: Text("Provider model ID"))
+                }
+                field("API key", hint: nil) {
+                    SecureField("", text: draft($key), prompt: Text("Paste your API key"))
+                }
+            }
+            .disabled(model.isVerifyingProvider)
+
+            VStack(alignment: .leading, spacing: 12) {
+                if model.isVerifyingProvider {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Testing connection…").foregroundStyle(.secondary)
+                    }
+                } else {
+                    Label(statusText, systemImage: statusSymbol)
+                        .font(.callout)
+                        .foregroundStyle(statusColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: 10) {
+                    if model.keySaved {
+                        Button("Remove provider…", role: .destructive) { confirmingRemoval = true }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .disabled(model.isVerifyingProvider || archiveBusy)
+                    }
+                    Spacer()
+                    if hasEdits && model.keySaved {
+                        Button("Revert") { loadSavedProvider(); testResult = nil }
+                            .disabled(model.isVerifyingProvider)
+                    }
+                    Button(hasEdits || !model.keySaved ? "Test & save" : "Test connection") {
+                        Task {
+                            await model.testProviderConfiguration(baseURL: baseURL, modelID: modelID, key: key)
+                            testResult = model.providerStatus
+                            if testResult == "Connected" { loadSavedProvider() }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(!complete || model.isVerifyingProvider || archiveBusy)
+                }
+            }
+            .padding(.top, 2)
+
+            Divider()
+            DisclosureGroup("How processing & storage work", isExpanded: $showingDetails) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Audio is sent to this provider. Without a saved provider, recordings wait locally.")
+                    Text("Testing sends a short text request, not audio. Saving resumes pending recordings.")
+                    Text("The API key is stored unencrypted in your local app preferences.")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var providerStateSymbol: String {
-        if model.providerStatus == nil { return model.keySaved ? "checkmark.circle" : "exclamationmark.circle" }
-        return model.providerStatus == "Connected" ? "checkmark.circle" : "exclamationmark.circle"
+    private var statusSymbol: String {
+        if let testResult { return testResult == "Connected" ? "checkmark.circle.fill" : "exclamationmark.circle" }
+        return hasEdits ? "pencil.circle" : (model.keySaved ? "checkmark.circle" : "info.circle")
     }
 
-    private var providerStateColor: Color {
-        model.providerStatus == "Connected" ? .green : .secondary
+    private var statusColor: Color {
+        if let testResult { return testResult == "Connected" ? .green : .orange }
+        return .secondary
     }
 
-    private var providerConfigurationComplete: Bool {
-        [model.providerBaseURL, model.selectedModelID, model.apiKey]
-            .allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private func draft(_ value: Binding<String>) -> Binding<String> {
+        Binding(get: { value.wrappedValue }, set: {
+            value.wrappedValue = $0
+            testResult = nil
+        })
+    }
+
+    private func field<Content: View>(_ title: String, hint: String?, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.subheadline.weight(.medium))
+            content()
+                .labelsHidden()
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
+                .font(.system(.body, design: .monospaced))
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel(title)
+            if let hint { Text(hint).font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+
+    private var statusText: String {
+        if let testResult {
+            return testResult == "Connected" ? "Connection verified. Configuration saved." : testResult
+        }
+        if hasEdits { return "Unsaved changes" }
+        return model.keySaved ? "Configuration saved." : "Add a provider when you’re ready to process audio."
+    }
+
+    private var hasEdits: Bool {
+        baseURL != model.providerBaseURL || modelID != model.selectedModelID || key != model.apiKey
+    }
+    private var complete: Bool {
+        [baseURL, modelID, key].allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+    private var archiveBusy: Bool {
+        model.isRecording || model.isChangingRecording || model.isProcessing || model.isImporting
+    }
+    private func loadSavedProvider() {
+        baseURL = model.providerBaseURL
+        modelID = model.selectedModelID
+        key = model.apiKey
+    }
+}
+
+struct NewProjectSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var error: String?
+    @FocusState private var nameFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("New project", systemImage: "folder.badge.plus").font(.title2.weight(.semibold))
+            Text("Keep related recordings, transcripts, and summaries together.")
+                .foregroundStyle(.secondary)
+            TextField("Project name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($nameFocused)
+                .onSubmit(create)
+            Text("Created in your meeting archive and selected for new recordings.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let message = error ?? validationMessage {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Create project", action: create)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(validName == nil)
+            }
+        }
+        .padding(24)
+        .frame(width: 400)
+        .onAppear { nameFocused = true }
+        .onChange(of: name) { error = nil }
+    }
+
+    private var validName: String? { try? ArchiveStore.projectName(name) }
+    private var validationMessage: String? {
+        guard !name.isEmpty else { return nil }
+        guard let validName else { return "Use 1–60 characters without /, :, control characters, or leading or trailing periods." }
+        if model.projects.contains(where: { $0.name.localizedCaseInsensitiveCompare(validName) == .orderedSame }) {
+            return "This project already exists. Creating will select the existing project."
+        }
+        return nil
+    }
+    private func create() {
+        guard let validName else { return }
+        do {
+            try model.createProject(named: validName)
+            dismiss()
+        } catch { self.error = error.localizedDescription }
     }
 }

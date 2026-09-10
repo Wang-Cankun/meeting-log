@@ -14,6 +14,8 @@ struct SessionManifest: Codable, Identifiable {
     var videoEnabled: Bool
     var microphoneID: String?
     var lastError: String?
+    var projectName: String? = nil
+    var importedFileName: String? = nil
 }
 
 struct TranscriptBlock: Codable, Identifiable {
@@ -135,7 +137,7 @@ enum AudioLevelState: Equatable {
 
     var label: String {
         switch self {
-        case .silence: "Monitoring, silence"
+        case .silence: "Listening for audio"
         case .active: "Audio detected"
         case .high: "High level"
         case .clipping: "Near clipping"

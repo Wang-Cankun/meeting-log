@@ -1,0 +1,14 @@
+Mode: built-in image_gen
+Selected asset: app-icon-blue-v2.png (original generation). Later transparency refinements did not improve the edge quality.
+
+Generation prompt:
+Use case: logo-brand
+Asset type: production macOS application icon for MeetingLog, an audio recording, transcription and meeting notes app.
+Primary request: a refined new icon consistent with a clean native SwiftUI interface, cool neutral surfaces, restrained system-blue accent, friendly clarity.
+Subject: one unified bold blue emblem combining five rounded vertical waveform bars with three short horizontal note lines, visually reading as audio becoming a concise meeting note. Integrate into one balanced compact mark, not a collage of separate icons.
+Style: exceptionally simple, crisp, precise geometry; soft white porcelain macOS rounded-square tile with very subtle edge depth, blue emblem with barely perceptible dimensional finish. Strong silhouette readable at small app-icon sizes.
+Composition: single centered icon, straight-on orthographic, square 1024x1024 canvas; tile fills about 88% of canvas, generous balanced internal whitespace. Transparent background outside rounded-square tile, genuine alpha, no surrounding scene.
+Constraints: no text, letters, logos, microphone, extra badges, multicolor bars, rainbow, dramatic gradients, glass effects, thick bevels, heavy shadows, mockup board or multiple variants. Deliver one finished icon.
+
+Refinement prompt:
+Use case: precise-object-edit. This is the new MeetingLog macOS icon. Keep the exact blue waveform and three note strokes, their positions, the white rounded-square tile, proportions and styling unchanged. Repair only the tile's outer boundary and transparency: remove all stray white flecks, ragged fringe, isolated pixels and noisy shadows outside it. Make the rounded-square silhouette perfectly smooth with clean antialiased edges and genuinely transparent empty canvas outside the tile. No new objects, no text, no changes to the emblem. Production app icon asset.

@@ -18,6 +18,12 @@ struct MediaProcessor {
 
     static func pendingInput(in directory: URL) -> PendingCaptureInput? {
         let fileManager = FileManager.default
+        for ext in AudioImport.supportedExtensions {
+            let imported = directory.appending(path: "original.\(ext)")
+            if let size = try? imported.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 {
+                return .combined(imported)
+            }
+        }
         let combined = directory.appending(path: "capture.mov")
         if let size = try? combined.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 {
             return .combined(combined)
@@ -96,7 +102,10 @@ struct MediaProcessor {
             throw MediaError.exportUnavailable
         }
         if let range { exporter.timeRange = range }
-        try await exporter.export(to: destination, as: .m4a)
+        let temporary = destination.deletingLastPathComponent().appending(path: ".export-\(UUID().uuidString).m4a")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try await exporter.export(to: temporary, as: .m4a)
+        try FileManager.default.moveItem(at: temporary, to: destination)
     }
 
     private func addAudio(

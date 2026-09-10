@@ -14,7 +14,9 @@ struct MeetingProcessor {
 
         do {
             progress("Preparing audio")
-            let capture = directory.appending(path: "capture.mov")
+            guard case let .combined(capture) = MediaProcessor.pendingInput(in: directory) else {
+                throw MediaError.emptyRecording
+            }
             let prepared = try await MediaProcessor().prepareAudio(from: capture, in: directory)
             var blocks = try loadBlocks(in: directory) ?? prepared.chunks.enumerated().map {
                 TranscriptBlock(id: $0.offset, startSeconds: $0.element.startSeconds, endSeconds: $0.element.endSeconds)

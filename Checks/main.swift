@@ -101,3 +101,73 @@ precondition(!pendingAfterDiscard)
 precondition(!FileManager.default.fileExists(atPath: discardedSession.0.path))
 try FileManager.default.removeItem(at: compatibilityRoot)
 print("MeetingLog check passed")
+
+// Optional real audio fixtures remain local; no provider requests are made.
+for path in CommandLine.arguments.dropFirst() {
+    let source = URL(filePath: path)
+    let root = FileManager.default.temporaryDirectory.appending(path: "meeting-log-import-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ArchiveStore(root: root)
+    let project = try store.createProject(named: "导入测试")
+    let date = Date(timeIntervalSince1970: 1_700_000_000)
+    let before = try Data(contentsOf: source)
+    let (directory, manifest) = try await AudioImport.stage(source, date: date, projectName: project.name, store: store)
+    precondition(manifest.startedAt == date && manifest.projectName == project.name)
+    precondition(manifest.status == .captured && !manifest.videoEnabled)
+    let recovered = try store.pendingSessions()
+    precondition(recovered.count == 1 && recovered[0].1.importedFileName == source.lastPathComponent)
+    guard case let .combined(input) = MediaProcessor.pendingInput(in: directory) else {
+        preconditionFailure("Imported audio must be recoverable")
+    }
+    let copy = try Data(contentsOf: input)
+    precondition(copy == before)
+    let prepared = try await MediaProcessor().prepareAudio(from: input, in: directory)
+    precondition(!prepared.chunks.isEmpty)
+    for chunk in prepared.chunks { _ = try await AudioImport.inspect(chunk.url) }
+    let retry = try await MediaProcessor().prepareAudio(from: input, in: directory)
+    precondition(retry.chunks.count == prepared.chunks.count)
+    let after = try Data(contentsOf: source)
+    precondition(before == after)
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [FixtureProvider.self]
+    let client = ProviderClient(baseURL: "https://fixture.invalid", apiKey: "fixture", model: "fixture",
+                                session: URLSession(configuration: configuration))
+    let failingClient = ProviderClient(baseURL: "https://failure.invalid", apiKey: "fixture", model: "fixture",
+                                       session: URLSession(configuration: configuration))
+    do {
+        _ = try await MeetingProcessor(store: store, client: failingClient)
+            .process(directory: directory, manifest: manifest, projectName: manifest.projectName)
+        preconditionFailure("Provider failure must leave a recoverable import")
+    } catch ProviderError.authentication {}
+    let failed = try store.pendingSessions()
+    precondition(failed.count == 1 && failed[0].1.status == .failed)
+    let retained = try Data(contentsOf: input)
+    precondition(retained == before)
+    let destination = try await MeetingProcessor(store: store, client: client)
+        .process(directory: directory, manifest: recovered[0].1, projectName: recovered[0].1.projectName)
+    precondition(destination.deletingLastPathComponent().deletingLastPathComponent().resolvingSymlinksInPath().path == project.url.resolvingSymlinksInPath().path,
+                 "Unexpected destination: \(destination.path), project: \(project.url.path)")
+    precondition(destination.lastPathComponent.hasPrefix(ArchiveStore.timestamp.string(from: date)))
+    for name in ["original.m4a", "audio.m4a", "transcript.md", "summary.md"] {
+        precondition(FileManager.default.fileExists(atPath: destination.appending(path: name).path))
+    }
+    precondition(!FileManager.default.fileExists(atPath: directory.path))
+    print("Import fixture passed: \(source.lastPathComponent), \(prepared.chunks.count) blocks")
+}
+
+
+final class FixtureProvider: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        // Synthetic responses exercise archiving without sending recordings anywhere.
+        let content = """
+        {"title":"Import fixture","projectName":"导入测试","summary":["Synthetic test response."],"actionItems":[],"decisions":[],"keyTopics":[]}
+        """
+        let data = try! JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": content]]]])
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: request.url?.host == "failure.invalid" ? 401 : 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}

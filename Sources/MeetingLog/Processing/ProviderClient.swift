@@ -4,6 +4,7 @@ struct ProviderClient {
     let baseURL: String
     let apiKey: String
     let model: String
+    var session: URLSession = .shared
 
     var endpoint: URL {
         get throws {
@@ -45,7 +46,7 @@ struct ProviderClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ProviderError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             if http.statusCode == 401 || http.statusCode == 403 { throw ProviderError.authentication }

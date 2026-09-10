@@ -55,3 +55,7 @@ Microphone capture is optional and writes `microphone.m4a`. Its `AVCaptureSessio
 Recording start and stop are single-flight operations. Capture callback failures use the same stop path so every active source is closed. Pending-session recovery does not run during recording, and `capture.mov` becomes visible only after a complete export is atomically moved into place. Completed outputs move into the selected project before recoverable pending media is cleaned up. A successfully stopped recording shorter than 10 seconds is discarded before mixing; capture failures still preserve the session in `.pending`.
 
 ScreenCaptureKit handles optional video only. The Apple content picker selects a display, window, or application after Record Screen is enabled. Video remains 1080p HEVC at 10 FPS and writes directly to `screen.mov`.
+
+## Imported audio
+
+The import window validates a selected or dropped audio file with AVFoundation, then copies it into a hidden staging directory. Only after the copy and manifest are complete is it moved into the recoverable pending queue. Imports persist the chosen meeting date, project, and original filename. Recovery and processing accept the original audio directly without a capture mixdown. The archive retains `original.<extension>` in addition to `audio.m4a` and the Markdown outputs; the AirDropped source is never moved or deleted. Audio exports become visible atomically after successful completion so a failed export cannot masquerade as a reusable output.

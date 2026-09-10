@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ControlPanel: View {
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @ObservedObject var model: AppModel
     @ObservedObject private var audioLevels: AudioLevels
@@ -14,25 +15,41 @@ struct ControlPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
-            audioSources
-            Divider()
-            screenRow
-            Divider()
-            projectRow
+            VStack(spacing: 0) {
+                audioSources
+                Divider().padding(.leading, 44)
+                screenRow
+                Divider().padding(.leading, 44)
+                projectRow
+            }
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+            .padding(.horizontal, 16)
+
+            HStack(spacing: 10) {
+                recordingControl
+                Button {
+                    openWindow(id: "import-audio")
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                } label: {
+                    Label("Import audio", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .help("Import a recording from your iPhone or Mac")
+            }
+            .padding(16)
+
             if showsProcessingStatus {
-                Divider()
                 processingStatus
             }
             Divider()
             recentMeetings
-            Divider()
-            recordingControl
             footer
         }
         .foregroundStyle(.primary)
         .background(Color(nsColor: .windowBackgroundColor))
-        .frame(width: 380)
+        .frame(width: 400)
         .onAppear { model.panelDidOpen() }
         .onDisappear { model.panelDidClose() }
     }
@@ -49,19 +66,18 @@ struct ControlPanel: View {
                     Text(startedAt, style: .timer)
                         .font(.title2.weight(.semibold).monospacedDigit())
                 } else {
-                    Text("00:00")
-                        .font(.title2.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    Text("MeetingLog")
+                        .font(.title3.weight(.semibold))
                 }
-                Text(model.statusText)
+                Text(model.phase == .idle && model.canStartRecording ? "Record a meeting or import audio" : model.statusText)
                     .font(.caption)
                     .foregroundStyle(headerStatusColor)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
         .accessibilityElement(children: .combine)
     }
 
@@ -103,12 +119,8 @@ struct ControlPanel: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 6)
-                HStack(spacing: 10) {
-                    systemAudioMenu
-                        .frame(width: 108, alignment: .trailing)
-                    Color.clear.frame(width: 54)
-                }
-                .frame(width: 172)
+                systemAudioMenu
+                    .frame(maxWidth: 150, alignment: .trailing)
             }
             LevelMeter(
                 source: "Mac audio",
@@ -153,7 +165,7 @@ struct ControlPanel: View {
             Text(model.selectedSystemAudioBundleID == nil ? "All apps" : model.selectedSystemAudioName)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(width: 88, alignment: .leading)
+                .frame(maxWidth: 130, alignment: .leading)
         }
         .menuStyle(.button)
         .controlSize(.small)
@@ -176,47 +188,40 @@ struct ControlPanel: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                HStack(spacing: 10) {
-                    if model.microphoneEnabled {
-                        Menu {
-                            Button("System default") { model.selectMicrophone(nil) }
-                            ForEach(model.microphones, id: \.uniqueID) { device in
-                                Button(device.localizedName) { model.selectMicrophone(device.uniqueID) }
-                            }
-                        } label: {
-                            Text(selectedMicrophoneName)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .frame(width: 88, alignment: .leading)
-                        }
-                        .menuStyle(.button)
-                        .controlSize(.small)
-                        .disabled(model.isRecording || model.isChangingRecording)
-                        .accessibilityLabel("Microphone device")
-                        .frame(width: 108, alignment: .trailing)
-                    } else {
-                        Color.clear
-                    }
-                    Toggle("Include microphone", isOn: Binding(
-                        get: { model.microphoneEnabled },
-                        set: { model.setMicrophoneEnabled($0) }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .disabled(model.isRecording || model.isChangingRecording)
-                    .frame(width: 54)
-                }
-                .frame(width: 172)
+                Toggle("Include microphone", isOn: Binding(
+                    get: { model.microphoneEnabled },
+                    set: { model.setMicrophoneEnabled($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(model.isRecording || model.isChangingRecording)
             }
-            LevelMeter(
-                source: "Microphone",
-                state: model.microphoneStateText,
-                level: audioLevels.microphone,
-                enabled: model.microphoneEnabled
-                    && model.microphonePermission == .authorized
-                    && !model.microphones.isEmpty
-            )
-            .padding(.leading, 34)
+            if model.microphoneEnabled {
+                Menu {
+                    Button("System default") { model.selectMicrophone(nil) }
+                    ForEach(model.microphones, id: \.uniqueID) { device in
+                        Button(device.localizedName) { model.selectMicrophone(device.uniqueID) }
+                    }
+                } label: {
+                    Text(selectedMicrophoneName).lineLimit(1).truncationMode(.middle)
+                }
+                .menuStyle(.button)
+                .controlSize(.small)
+                .disabled(model.isRecording || model.isChangingRecording)
+                .accessibilityLabel("Microphone device")
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.leading, 34)
+                LevelMeter(
+                    source: "Microphone",
+                    state: model.microphoneStateText,
+                    level: audioLevels.microphone,
+                    enabled: model.microphoneEnabled
+                        && model.microphonePermission == .authorized
+                        && !model.microphones.isEmpty
+                )
+                .padding(.leading, 34)
+            }
             if model.microphoneEnabled,
                model.microphonePermission == .denied || model.microphonePermission == .restricted {
                 HStack {
@@ -236,8 +241,8 @@ struct ControlPanel: View {
                 .frame(width: 24)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Record screen").font(.body.weight(.medium))
-                Text(model.videoEnabled ? model.selectedScreenSource ?? "Choose a source" : "Not included")
+                Text("Screen video").font(.body.weight(.medium))
+                Text(model.videoEnabled ? model.selectedScreenSource ?? "Choose a source" : "Optional")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -249,8 +254,6 @@ struct ControlPanel: View {
                         .controlSize(.small)
                         .frame(width: 108, alignment: .trailing)
                         .disabled(model.isRecording || model.isChangingRecording)
-                } else {
-                    Color.clear
                 }
                 Toggle("Record screen", isOn: Binding(
                     get: { model.videoEnabled },
@@ -259,9 +262,8 @@ struct ControlPanel: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .disabled(model.isRecording || model.isChangingRecording)
-                .frame(width: 54)
+                .controlSize(.small)
             }
-            .frame(width: 172)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -273,20 +275,10 @@ struct ControlPanel: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 24)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Save to project").font(.body.weight(.medium))
-                Text("Applied when recording stops")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 6)
-            HStack(spacing: 10) {
-                projectMenu
-                    .frame(width: 108, alignment: .trailing)
-                Color.clear.frame(width: 54)
-            }
-            .frame(width: 172)
+            Text("Project").font(.body.weight(.medium))
+            Spacer(minLength: 12)
+            projectMenu
+                .frame(maxWidth: 220, alignment: .trailing)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -320,7 +312,7 @@ struct ControlPanel: View {
             Text(model.selectedProjectName ?? "Inbox")
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(width: 88, alignment: .leading)
+                .frame(maxWidth: 190, alignment: .leading)
         }
         .menuStyle(.button)
         .controlSize(.small)
@@ -382,17 +374,16 @@ struct ControlPanel: View {
     private var recordingControl: some View {
         Button { model.toggleRecording() } label: {
             Label(
-                model.isRecording ? "Stop recording" : "Record",
+                model.isRecording ? "Stop recording" : "Start recording",
                 systemImage: model.isRecording ? "stop.circle.fill" : "record.circle.fill"
             )
             .font(.body.weight(.semibold))
-            .frame(minWidth: 140)
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
-        .tint(.red)
+        .tint(model.isRecording ? .red : .accentColor)
         .controlSize(.large)
         .disabled(model.isChangingRecording || (!model.isRecording && !model.canStartRecording))
-        .padding(.vertical, 12)
     }
 
     private var recentMeetings: some View {
@@ -402,7 +393,7 @@ struct ControlPanel: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Show All in Finder") { model.showArchiveInFinder() }
+                Button("Open folder") { model.showArchiveInFinder() }
                     .buttonStyle(.plain)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -423,8 +414,10 @@ struct ControlPanel: View {
                         Button { model.showInFinder(meeting.url) } label: {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(meeting.title)
-                                    .lineLimit(1)
-                                Text("\(meeting.projectName) · \(meeting.dateText)")
+                                    .font(.callout.weight(.medium))
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                Text("\(meeting.projectName) · \(meeting.date.formatted(.dateTime.month(.abbreviated).day().year()))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -434,15 +427,21 @@ struct ControlPanel: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Show \(meeting.title) in Finder")
 
-                        Button(role: .destructive) { model.deleteMeeting(meeting) } label: {
-                            Image(systemName: "trash")
+                        Menu {
+                            Button("Show in Finder", systemImage: "folder") { model.showInFinder(meeting.url) }
+                            Divider()
+                            Button("Move to Trash", systemImage: "trash", role: .destructive) { model.deleteMeeting(meeting) }
+                                .disabled(model.isRecording || model.isChangingRecording || model.isProcessing)
+                        } label: {
+                            Image(systemName: "ellipsis").frame(width: 24, height: 24)
                         }
-                        .buttonStyle(.borderless)
-                        .disabled(model.isRecording || model.isChangingRecording || model.isProcessing)
-                        .accessibilityLabel("Delete \(meeting.title)")
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .accessibilityLabel("Actions for \(meeting.title)")
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 8)
                 }
             }
         }
@@ -450,10 +449,10 @@ struct ControlPanel: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
+            Button { showSettings() } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
             Spacer()
-            Button("Settings") { showSettings() }
-                .padding(.vertical, 4)
-            Divider().frame(height: 12)
             Button(role: .destructive) { NSApplication.shared.terminate(nil) } label: {
                 Text("Quit")
                     .padding(.vertical, 4)
@@ -464,7 +463,7 @@ struct ControlPanel: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 16)
-        .padding(.bottom, 12)
+        .padding(.vertical, 12)
     }
 
     private var selectedMicrophoneName: String {

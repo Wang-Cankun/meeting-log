@@ -1,0 +1,14 @@
+Mode: built-in image_gen
+Final source: app-icon-polished.png
+
+Palette and edge polish:
+Use case: precise-object-edit.
+Polish this MeetingLog app icon into a production macOS icon. Keep the same five waveform bars and three note lines, their shape and placement. Change the palette to a saturated system-blue rounded-square tile with a crisp white emblem. This deliberate high-contrast blue silhouette must have perfectly smooth geometric rounded corners and edges. Eliminate the old white tile, all fuzzy white edging, detached flecks, and shadows outside the tile. Flat premium native app styling with only a very subtle blue tonal variation; no bevel, no external shadow, no glass. One centered icon occupying 88% of the square canvas, generous transparent margin outside. Actual transparent PNG alpha outside the blue tile, not a checkerboard. Strong legibility at 32px. No text, no added symbols.
+
+Background extraction:
+Use case: background-extraction. Remove ONLY the gray checkerboard surrounding this saturated blue app-icon tile. Keep the smooth blue rounded square and white audio mark pixel-for-pixel visually unchanged. Deliver genuine transparent alpha outside the blue silhouette. No simulated checkerboard, no gray border, no shadow or feathering, no redesign. This is background removal for an ICNS app asset.
+
+Final alpha extraction:
+Remove the background. Make the background transparent.
+
+Packaging: native sips resize to macOS iconset sizes; iconutil converts to AppIcon.icns.

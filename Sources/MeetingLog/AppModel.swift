@@ -19,6 +19,7 @@ final class AudioLevels: ObservableObject {
 
 @MainActor
 final class AppModel: ObservableObject {
+    @Published private(set) var isImporting = false
     @Published var phase: AppPhase = .idle
     @Published var videoEnabled = false
     @Published var microphoneEnabled = UserDefaults.standard.object(forKey: "microphoneEnabled") as? Bool ?? false
@@ -150,25 +151,27 @@ final class AppModel: ObservableObject {
         setArchiveRoot(url)
     }
 
-    func testProviderConfiguration() {
-        Task {
-            providerBaseURL = providerBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            selectedModelID = selectedModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-            apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !providerBaseURL.isEmpty, !selectedModelID.isEmpty, !apiKey.isEmpty else {
-                providerStatus = "Complete all provider fields."
-                return
-            }
-            isVerifyingProvider = true
-            defer { isVerifyingProvider = false }
-            do {
-                try await providerClient().verifyConfiguration()
-                saveProviderConfiguration()
-                providerStatus = "Connected"
-                await resumePendingSessions()
-            } catch {
-                providerStatus = error.localizedDescription
-            }
+    func testProviderConfiguration(baseURL: String, modelID: String, key: String) async {
+        guard !isVerifyingProvider else { return }
+        let baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !baseURL.isEmpty, !modelID.isEmpty, !key.isEmpty else {
+            providerStatus = "Complete all provider fields."
+            return
+        }
+        isVerifyingProvider = true
+        defer { isVerifyingProvider = false }
+        do {
+            try await ProviderClient(baseURL: baseURL, apiKey: key, model: modelID).verifyConfiguration()
+            providerBaseURL = baseURL
+            selectedModelID = modelID
+            apiKey = key
+            saveProviderConfiguration()
+            providerStatus = "Connected"
+            await resumePendingSessions()
+        } catch {
+            providerStatus = error.localizedDescription
         }
     }
 
@@ -259,24 +262,10 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    func createProject() {
-        guard canManageArchive else { return }
-        let alert = NSAlert()
-        alert.messageText = "New Project"
-        alert.informativeText = "Enter the folder name MeetingLog should use."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.placeholderString = "Project name"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            let project = try recordingStore().createProject(named: field.stringValue)
-            selectProject(project.name)
-            refreshArchive()
-        } catch {
-            showError(error.localizedDescription)
-        }
+    func createProject(named name: String) throws {
+        let project = try recordingStore().createProject(named: name)
+        selectProject(project.name)
+        refreshArchive()
     }
 
     func discardPendingMeetings() {
@@ -524,6 +513,22 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func importAudio(_ url: URL, date: Date, projectName: String?) async throws {
+        guard !isImporting else { return }
+        isImporting = true
+        defer { isImporting = false }
+        let store = try recordingStore()
+        let (directory, manifest) = try await AudioImport.stage(
+            url, date: date, projectName: projectName ?? ArchiveStore.inboxName, store: store
+        )
+        waitingForProcessingCount += 1
+        if keySaved, !selectedModelID.isEmpty {
+            enqueue(ProcessingJob(directory: directory, manifest: manifest, store: store,
+                                  baseURL: providerBaseURL, key: apiKey, model: selectedModelID,
+                                  projectName: manifest.projectName))
+        }
+    }
+
     private func resumePendingSessions() async {
         guard !archiveRootPath.isEmpty,
               !isRecording,
@@ -574,7 +579,7 @@ final class AppModel: ObservableObject {
                 baseURL: providerBaseURL,
                 key: apiKey,
                 model: selectedModelID,
-                projectName: selectedProjectName
+                projectName: manifest.projectName ?? selectedProjectName
             ))
         }
     }
@@ -635,10 +640,6 @@ final class AppModel: ObservableObject {
         return ArchiveStore(root: URL(filePath: archiveRootPath, directoryHint: .isDirectory))
     }
 
-    private func providerClient() -> ProviderClient {
-        ProviderClient(baseURL: providerBaseURL, apiKey: apiKey, model: selectedModelID)
-    }
-
     private func saveProviderConfiguration() {
         UserDefaults.standard.set(providerBaseURL, forKey: "providerBaseURL")
         UserDefaults.standard.set(selectedModelID, forKey: "providerModel")
@@ -658,7 +659,7 @@ final class AppModel: ObservableObject {
     }
 
     private var canChangeArchive: Bool {
-        guard !isRecording, !isChangingRecording, !isProcessing else {
+        guard !isRecording, !isChangingRecording, !isProcessing, !isImporting else {
             fail("Wait for recording and processing to finish before changing the archive.")
             return false
         }
@@ -701,7 +702,7 @@ final class AppModel: ObservableObject {
     }
 
     private var canManageArchive: Bool {
-        guard !isRecording, !isChangingRecording, !isProcessing else {
+        guard !isRecording, !isChangingRecording, !isProcessing, !isImporting else {
             showError("Wait for recording and processing to finish.")
             return false
         }

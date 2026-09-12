@@ -14,7 +14,7 @@ menu bar panel
   -> pending session directory
   -> system audio + microphone mixdown to compatible capture.mov
   -> compressed audio + optional HEVC video
-  -> five-minute audio blocks
+  -> ten-minute audio blocks with ten-second overlap
   -> configured OpenAI-compatible provider transcription coverage gate
   -> evidence-bound summary in the selected project
   -> project/meetings/session archive
@@ -35,9 +35,9 @@ menu bar panel
 ```text
 <root>/
   <project-name>/
-    context.md
+    meeting_context.md
     meetings/
-      <MMddyyyy><title>/
+      <MMddyyyy>-<short-title>/
         transcript.md
         summary.md
         audio.m4a
@@ -58,4 +58,20 @@ ScreenCaptureKit handles optional video only. The Apple content picker selects a
 
 ## Imported audio
 
-The import window validates a selected or dropped audio file with AVFoundation, then copies it into a hidden staging directory. Only after the copy and manifest are complete is it moved into the recoverable pending queue. Imports persist the chosen meeting date, project, and original filename. Recovery and processing accept the original audio directly without a capture mixdown. The archive retains `original.<extension>` in addition to `audio.m4a` and the Markdown outputs; the AirDropped source is never moved or deleted. Audio exports become visible atomically after successful completion so a failed export cannot masquerade as a reusable output.
+New audio preparation uses ten-minute blocks with ten-second overlap. Each chunk directory persists its block duration so retries retain the same audio and transcript boundaries; existing chunks from older builds continue using five-minute blocks.
+
+The import window validates a selected or dropped audio file with AVFoundation, then copies it into a hidden staging directory. Only after the copy and manifest are complete is it moved into the recoverable pending queue. Imports persist the chosen meeting date, project, and original filename. Recovery and processing accept the original audio directly without a capture mixdown. After the completed session is archived, its temporary `original.<extension>` or `originals/` copies are removed. The archive retains `audio.m4a`, Markdown, and source metadata; the AirDropped source is never moved or deleted. Audio exports become visible atomically after successful completion so a failed export cannot masquerade as a reusable output.
+
+Multi-file imports commit all source copies as one pending session. Ordered originals live in `originals/`, named by index to avoid filename collisions; `sources.json` preserves original names, order, and durations and stays in the final archive. The manifest also retains source metadata for recovery. Preparation concatenates playback audio but chunks each original independently, so overlap never crosses a source boundary. The transcript labels each recording and states that playback order does not establish continuous conversation or real-world chronology. The user chooses one reference date and project for the complete group; all blocks must succeed before a single summary is archived.
+
+Transcription uses a bounded pool of three concurrent block requests within the active meeting. Results are checkpointed serially as each completes and assembled in source/time order. After a terminal block failure, the pool stops scheduling new work and drains in-flight requests so successful results remain recoverable; retry resumes only incomplete blocks. The meeting queue remains serial, and summary generation starts only after complete coverage. Provider calls make at most three attempts for rate limits, temporary server errors, and transient network failures, with exponential backoff and `Retry-After` support. Authentication and other permanent request failures are not automatically retried.
+
+## Readable transcript and bilingual summaries
+
+Upload chunks are mono AAC at 24 kHz and 48 kbps; the archive playback copy retains the normal Apple M4A export quality. Raw capture CAF files never enter provider requests. New chunks are speech-encoded before upload; existing cached chunks retain their previous encoding on retry.
+
+Completed block output is retained as `transcript_raw.md`. One text-only request edits the complete merged transcript into `transcript.md`, removing empty fillers and clear overlap duplicates while preserving recording/excerpt boundaries, timestamps, uncertainty and conversation. Structural rejection falls back to the raw transcript with a note; transport failure leaves the job recoverable. The source remains available for checking any editorial error.
+
+The reviewed summary is saved as `summary.md`; another text-only request produces Mainland Simplified Chinese `summary_cn.md` and a short Chinese folder title. Names, technical terms, exact evidence quotes and metadata remain traceable. Folder names use `MMddyyyy-<short-title>`, bounded to 32 title characters and 96 UTF-8 bytes. Old names remain discoverable. Global and project meeting instructions live in `meeting_context.md`; general `context.md` files are not ingested.
+
+Summary regeneration previews both languages, checks both files for concurrent edits, and backs up both before replacement. Regeneration preserves transcript and folder identity.

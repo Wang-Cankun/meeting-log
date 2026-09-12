@@ -22,6 +22,12 @@ struct MeetingLogApp: App {
         .defaultPosition(.center)
         .defaultLaunchBehavior(.suppressed)
 
+        Window("Meeting summaries", id: "meeting-summaries") {
+            SummaryReviewView(model: model)
+        }
+        .defaultSize(width: 1000, height: 720)
+        .defaultLaunchBehavior(.suppressed)
+
         Settings {
             SettingsView(model: model)
         }

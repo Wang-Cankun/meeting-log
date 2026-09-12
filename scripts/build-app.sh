@@ -8,7 +8,7 @@ app_dir="$repo_dir/.build/MeetingLog.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$repo_dir/.build/release/MeetingLog" "$app_dir/Contents/MacOS/MeetingLog"
 cp "$repo_dir/Info.plist" "$app_dir/Contents/Info.plist"
-cp "$repo_dir/Assets/AppIcon.icns" "$app_dir/Contents/Resources/AppIcon.icns"
+cp "$repo_dir/Assets/AppIcon.icns" "$app_dir/Contents/Resources/MeetingLogIcon.icns"
 codesign --force --deep --sign - \
   --requirements '=designated => identifier "com.wangcankun.meeting-log"' \
   "$app_dir"

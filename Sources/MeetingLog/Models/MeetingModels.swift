@@ -16,10 +16,11 @@ struct SessionManifest: Codable, Identifiable {
     var lastError: String?
     var projectName: String? = nil
     var importedFileName: String? = nil
+    var importedParts: [ImportedAudioPart]? = nil
 }
 
-struct TranscriptBlock: Codable, Identifiable {
-    enum Status: String, Codable {
+struct TranscriptBlock: Codable, Identifiable, Sendable {
+    enum Status: String, Codable, Sendable {
         case pending
         case complete
         case failed
@@ -38,11 +39,13 @@ struct ActionItem: Codable, Equatable {
     var task: String
     var deadline: String
     var context: String
+    var evidence: [EvidenceReference]? = nil
 }
 
 struct MeetingDecision: Codable, Equatable {
     var decision: String
     var reasoning: String
+    var evidence: [EvidenceReference]? = nil
 }
 
 struct MeetingAnalysis: Codable, Equatable {
@@ -52,6 +55,11 @@ struct MeetingAnalysis: Codable, Equatable {
     var actionItems: [ActionItem]
     var decisions: [MeetingDecision]
     var keyTopics: [String]
+    var uncertainties: [String]? = nil
+    var milestones: [EvidenceNote]? = nil
+    var openQuestions: [EvidenceNote]? = nil
+    var deferredWork: [EvidenceNote]? = nil
+    var inventory: [EvidenceNote]? = nil
 }
 
 struct ProjectContext: Equatable {
@@ -143,4 +151,28 @@ enum AudioLevelState: Equatable {
         case .clipping: "Near clipping"
         }
     }
+}
+
+
+struct ImportedAudioPart: Codable, Equatable {
+    let fileName: String
+    let originalName: String
+    let duration: TimeInterval
+}
+
+/// A menu action is an event, even when it targets the same meeting twice.
+struct SummaryOpenRequest: Equatable {
+    let id = UUID()
+    let url: URL
+}
+
+struct EvidenceReference: Codable, Equatable {
+    let line: Int
+    let quote: String
+    var verified: Bool? = nil
+}
+
+struct EvidenceNote: Codable, Equatable {
+    let text: String
+    var evidence: [EvidenceReference]? = nil
 }

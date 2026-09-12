@@ -56,8 +56,13 @@ struct ControlPanel: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: headerSymbol)
-                .font(.title2)
+            Group {
+                if model.phase == .idle {
+                    MeetingMark().fill(.tint).frame(width: 30, height: 23)
+                } else {
+                    Image(systemName: headerSymbol).font(.title2)
+                }
+            }
                 .foregroundStyle(headerSymbolColor)
                 .contentTransition(.symbolEffect(.replace))
                 .accessibilityHidden(true)
@@ -393,7 +398,10 @@ struct ControlPanel: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Open folder") { model.showArchiveInFinder() }
+                Button("All meetings") {
+                    openWindow(id: "meeting-summaries")
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                }
                     .buttonStyle(.plain)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -428,6 +436,11 @@ struct ControlPanel: View {
                         .accessibilityLabel("Show \(meeting.title) in Finder")
 
                         Menu {
+                            Button("Regenerate summary…", systemImage: "arrow.clockwise") {
+                                model.summaryOpenRequest = SummaryOpenRequest(url: meeting.url)
+                                openWindow(id: "meeting-summaries")
+                                NSApplication.shared.activate(ignoringOtherApps: true)
+                            }
                             Button("Show in Finder", systemImage: "folder") { model.showInFinder(meeting.url) }
                             Divider()
                             Button("Move to Trash", systemImage: "trash", role: .destructive) { model.deleteMeeting(meeting) }

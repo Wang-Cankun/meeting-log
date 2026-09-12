@@ -20,10 +20,26 @@ MeetingLog is a personal macOS menu bar app that records all Mac audio or one ap
 
 ## Import an iPhone recording
 
-AirDrop a Voice Memo to Downloads, then click **Import Audio** in MeetingLog. Choose a file or drop it into the import window, select a project, and check the meeting date before importing. M4A, MP3, WAV, AIFF, and CAF are supported. The source file stays untouched; a copy is retained alongside the archived audio and Markdown. Processing uses the configured AI provider, or waits locally when no provider is configured.
+AirDrop a Voice Memo to Downloads, then click **Import Audio** in MeetingLog. Choose a file or drop it into the import window, select a project, and check the meeting date before importing. M4A, MP3, WAV, AIFF, and CAF are supported. The source file stays untouched; the app keeps its imported copy until compressed audio and Markdown are complete, then removes that extra copy. Processing uses the configured AI provider, or waits locally when no provider is configured.
 
 Run local import checks with real audio files (provider responses are simulated; no audio is uploaded):
 
 ```bash
 scripts/check.sh "$HOME/Downloads/New Recording.m4a" "$HOME/Downloads/New Recording 2.m4a"
 ```
+
+For a meeting captured in several recordings, add all related files to one import. Use the up/down controls to set their playback order, remove unwanted files, and choose one project and archive date. MeetingLog produces one transcript and summary, with labeled source boundaries, plus combined playback audio. The completed archive keeps combined audio and source metadata; temporary imported originals are removed. Unrelated meetings should be imported separately.
+
+Transcription submits up to three audio blocks concurrently, saves completed results for retry, and restores their original order before summarizing. Rate limits and temporary provider failures use delayed retries.
+
+### Regenerate a saved summary
+
+Choose **All meetings**, or **Regenerate summary…** in a recent meeting's menu. Select a meeting, update its project context if needed, and generate. The app uses the saved transcript, uploads no audio, and shows the current and proposed Markdown side by side. Choose **Save new summary** to replace it with a backup, or **Discard preview** to keep the original. Previous versions and generation provenance live in the meeting's hidden `.summary-history` folder.
+
+## Meeting files
+
+Use `meeting_context.md` at the archive root and in each project for meeting-specific names, aliases, and preferences. General project `context.md` is separate.
+
+New meetings use short Chinese folder names such as `09112026-空间多组学与R21课题合作`. The full title remains in Markdown. Uploads use 10-minute mono AAC chunks at 48 kbps, not the raw recording.
+
+Each new completed meeting includes `audio.m4a`, `transcript_raw.md`, the edited `transcript.md`, `summary.md`, and Mainland Simplified Chinese `summary_cn.md`. Cleanup removes empty fillers and obvious overlap duplicates while retaining conversation; the raw transcript remains the evidence backup. Summary regeneration previews and saves both languages. Existing transcripts are not automatically rewritten.

@@ -76,7 +76,7 @@ struct ArchiveStore {
         let name = try Self.projectName(value)
         if let existing = try projects().first(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
             try fileManager.createDirectory(at: existing.url.appending(path: "meetings", directoryHint: .isDirectory), withIntermediateDirectories: true)
-            let context = existing.url.appending(path: "context.md")
+            let context = existing.url.appending(path: "meeting_context.md")
             if !fileManager.fileExists(atPath: context.path) {
                 try "# \(existing.name)\n".write(to: context, atomically: true, encoding: .utf8)
             }
@@ -84,20 +84,20 @@ struct ArchiveStore {
         }
         let directory = root.appending(path: name, directoryHint: .isDirectory)
         try fileManager.createDirectory(at: directory.appending(path: "meetings", directoryHint: .isDirectory), withIntermediateDirectories: true)
-        try "# \(name)\n".write(to: directory.appending(path: "context.md"), atomically: true, encoding: .utf8)
+        try "# \(name)\n".write(to: directory.appending(path: "meeting_context.md"), atomically: true, encoding: .utf8)
         return ProjectFolder(name: name, url: directory)
     }
 
     func projectContexts() throws -> [ProjectContext] {
         try projects().map { project in
-            let contextURL = project.url.appending(path: "context.md")
+            let contextURL = project.url.appending(path: "meeting_context.md")
             let markdown = (try? String(contentsOf: contextURL, encoding: .utf8)) ?? ""
             return ProjectContext(name: project.name, markdown: markdown)
         }
     }
 
     func globalContext() throws -> String {
-        let url = root.appending(path: "context.md")
+        let url = root.appending(path: "meeting_context.md")
         if !fileManager.fileExists(atPath: url.path) {
             try "# Meeting context\n\nAdd frequent names, projects, and jargon here.\n".write(to: url, atomically: true, encoding: .utf8)
         }
@@ -111,11 +111,22 @@ struct ArchiveStore {
         let meetingsDirectory = projectDirectory.appending(path: "meetings", directoryHint: .isDirectory)
         try fileManager.createDirectory(at: meetingsDirectory, withIntermediateDirectories: true)
         let stamp = Self.timestamp.string(from: startedAt)
-        let safeTitle = Self.meetingTitle(title)
-        var destination = meetingsDirectory.appending(path: "\(stamp)\(safeTitle)", directoryHint: .isDirectory)
+        let fullTitle = Self.meetingTitle(title)
+        // Leave room for the date and collision suffix within the filesystem byte limit.
+        var safeTitle = ""
+        for character in fullTitle {
+            guard safeTitle.count < 32, (safeTitle + String(character)).utf8.count <= 96 else { break }
+            safeTitle.append(character)
+        }
+        if safeTitle.count < fullTitle.count,
+           let boundary = safeTitle.lastIndex(where: { $0.isWhitespace }),
+           safeTitle.distance(from: safeTitle.startIndex, to: boundary) > safeTitle.count / 2 {
+            safeTitle = String(safeTitle[..<boundary])
+        }
+        var destination = meetingsDirectory.appending(path: "\(stamp)-\(safeTitle)", directoryHint: .isDirectory)
         var suffix = 2
         while fileManager.fileExists(atPath: destination.path) {
-            destination = meetingsDirectory.appending(path: "\(stamp)\(safeTitle)-\(suffix)", directoryHint: .isDirectory)
+            destination = meetingsDirectory.appending(path: "\(stamp)-\(safeTitle)-\(suffix)", directoryHint: .isDirectory)
             suffix += 1
         }
         return destination
@@ -141,7 +152,9 @@ struct ArchiveStore {
                 guard let date = Self.timestamp.date(from: dateText) else { return nil }
                 let createdAt = values?.creationDate ?? date
                 return ArchivedMeeting(
-                    title: String(name.dropFirst(8)),
+                    title: (try? String(contentsOf: meeting.appending(path: "summary.md"), encoding: .utf8))?
+                        .components(separatedBy: .newlines).first(where: { $0.hasPrefix("# ") }).map { String($0.dropFirst(2)) }
+                        ?? String(name.dropFirst(8)).trimmingCharacters(in: CharacterSet(charactersIn: "-")),
                     projectName: project.name,
                     dateText: dateText,
                     date: date,
@@ -165,7 +178,8 @@ struct ArchiveStore {
         }.joined()
         let compact = replaced.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
-        return compact.isEmpty ? "Meeting" : String(compact.prefix(60))
+        // Titles are also displayed in Markdown; never truncate the actual meeting title.
+        return compact.isEmpty ? "Meeting" : compact
     }
 
     static func projectName(_ value: String) throws -> String {

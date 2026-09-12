@@ -44,6 +44,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var waitingForProcessingCount = 0
     @Published private(set) var isChangingRecording = false
     @Published private(set) var projects: [ProjectFolder] = []
+    @Published var summaryOpenRequest: SummaryOpenRequest?
     @Published private(set) var recentMeetings: [ArchivedMeeting] = []
     @Published var selectedProjectName = UserDefaults.standard.string(forKey: AppModel.projectDefaultsKey)
 
@@ -513,13 +514,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func importAudio(_ url: URL, date: Date, projectName: String?) async throws {
+    func importAudio(_ urls: [URL], date: Date, projectName: String?) async throws {
         guard !isImporting else { return }
         isImporting = true
         defer { isImporting = false }
         let store = try recordingStore()
         let (directory, manifest) = try await AudioImport.stage(
-            url, date: date, projectName: projectName ?? ArchiveStore.inboxName, store: store
+            urls, date: date, projectName: projectName ?? ArchiveStore.inboxName, store: store
         )
         waitingForProcessingCount += 1
         if keySaved, !selectedModelID.isEmpty {

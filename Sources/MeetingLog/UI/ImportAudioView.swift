@@ -92,12 +92,7 @@ struct ImportAudioView: View {
             Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 14) {
                 GridRow {
                     Text("Project").foregroundStyle(.secondary)
-                    Picker("Project", selection: $project) {
-                        Text("Inbox").tag(ArchiveStore.inboxName)
-                        ForEach(model.projects.filter { $0.name != ArchiveStore.inboxName }) { item in
-                            Text(item.name).tag(item.name)
-                        }
-                    }.labelsHidden()
+                    ProjectChooser(projects: model.projects, selection: $project, refresh: model.refreshArchive)
                 }
                 GridRow {
                     Text("Archive date").foregroundStyle(.secondary)

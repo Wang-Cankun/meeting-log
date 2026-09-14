@@ -316,7 +316,35 @@ final class AppModel: ObservableObject {
         }
     }
 
+    var canRetryProcessing: Bool {
+        !isRecording && !isChangingRecording && !isImporting && !isResumingPendingSessions
+            && processingTask == nil && currentProcessingPath == nil && processingQueue.isEmpty
+    }
+
     func retryFailedProcessing() {
+        guard canRetryProcessing else { return }
+        do {
+            let store = try recordingStore()
+            let pending = try store.pendingSessions()
+            let missing = pending.filter { _, manifest in
+                guard let name = manifest.projectName else { return false }
+                return (try? store.resolveProject(name)) == nil
+            }
+            if !missing.isEmpty {
+                let replacement = try store.resolveProject(selectedProjectName)
+                let alert = NSAlert()
+                alert.messageText = "Use a new location for pending meetings?"
+                alert.informativeText = "\(missing.count) pending meeting(s) refer to a missing project. Retry them in \(replacement.displayPath)? Their audio and completed transcripts will be preserved."
+                alert.addButton(withTitle: "Use this location")
+                alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn, canRetryProcessing else { return }
+                for (directory, original) in missing {
+                    var manifest = original
+                    manifest.projectName = replacement.name
+                    try store.write(manifest, to: directory)
+                }
+            }
+        } catch { showError(error.localizedDescription); return }
         processingFailureCount = 0
         Task { await resumePendingSessions() }
     }
@@ -333,10 +361,13 @@ final class AppModel: ObservableObject {
                 let recordsMicrophone = microphoneEnabled
                     && microphonePermission == .authorized
                     && !microphones.isEmpty
-                let created = try store.createPendingSession(
+                let destination = try store.resolveProject(selectedProjectName)
+                var created = try store.createPendingSession(
                     videoEnabled: videoEnabled,
                     microphoneID: recordsMicrophone ? selectedMicrophoneID : nil
                 )
+                created.1.projectName = destination.name
+                try store.write(created.1, to: created.0)
                 currentDirectory = created.0
                 currentManifest = created.1
                 if recordsMicrophone {
@@ -519,8 +550,9 @@ final class AppModel: ObservableObject {
         isImporting = true
         defer { isImporting = false }
         let store = try recordingStore()
+        let destination = try store.resolveProject(projectName)
         let (directory, manifest) = try await AudioImport.stage(
-            urls, date: date, projectName: projectName ?? ArchiveStore.inboxName, store: store
+            urls, date: date, projectName: destination.name, store: store
         )
         waitingForProcessingCount += 1
         if keySaved, !selectedModelID.isEmpty {
@@ -688,7 +720,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func refreshArchive() {
+    func refreshArchive() {
         guard let store = try? recordingStore() else {
             projects = []
             recentMeetings = []
@@ -696,10 +728,7 @@ final class AppModel: ObservableObject {
         }
         projects = (try? store.projects()) ?? []
         recentMeetings = (try? store.recentMeetings()) ?? []
-        if let selected = selectedProjectName,
-           !projects.contains(where: { $0.name.localizedCaseInsensitiveCompare(selected) == .orderedSame }) {
-            selectProject(nil)
-        }
+
     }
 
     private var canManageArchive: Bool {

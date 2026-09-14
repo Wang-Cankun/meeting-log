@@ -9,7 +9,7 @@
 | Configurable AI provider | accepted | One user-entered OpenAI-compatible endpoint, model, and API key serve transcription and summary; OpenRouter and Gemini 3.7 Flash remain the defaults |
 | Ten-minute blocks with ten-second overlap | accepted | Every block must succeed before final Markdown is written |
 | Transcript is evidence | accepted | Unsupported decisions are empty; unsupported context and reasons are empty strings |
-| Folder-owned projects | accepted | Users create Unicode project folders and choose the destination per recording in the panel; a missing or renamed selection falls back to `Inbox` |
+| Folder-owned projects | accepted | Users create Unicode project folders and choose the destination per recording in the panel; selection uses its relative path; a missing destination requires an explicit replacement |
 | Human-readable meeting folders | accepted | New meetings use `MMddyyyy-<short-title>` and numeric collision suffixes without migration of development archives |
 | Recoverable meeting deletion | accepted | The main panel lists three recent completed meetings and moves deleted meetings to the macOS Trash; Settings moves discarded pending sessions to the Trash as well |
 | Markdown owns project context | accepted | `<project>/meeting_context.md` supplies names, jargon, aliases, and project-specific instructions |

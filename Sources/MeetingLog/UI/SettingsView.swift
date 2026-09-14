@@ -71,7 +71,13 @@ struct SettingsView: View {
                 ForEach(model.projects) { project in
                     HStack(spacing: 10) {
                         Image(systemName: "folder").foregroundStyle(.secondary)
-                        Text(project.name).lineLimit(2)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(project.displayPath).fixedSize(horizontal: false, vertical: true)
+                            if model.selectedProjectName == project.name {
+                                Text("Meeting context: global › " + project.displayPath)
+                                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                         Spacer()
                         if model.selectedProjectName == project.name {
                             Text("Selected").font(.caption).foregroundStyle(.secondary)

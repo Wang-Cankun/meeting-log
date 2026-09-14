@@ -59,17 +59,57 @@ struct ArchiveStore {
 
     func projects() throws -> [ProjectFolder] {
         guard fileManager.fileExists(atPath: root.path) else { return [] }
-        return try fileManager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ).compactMap { directory in
-            let values = try? directory.resourceValues(forKeys: [.isDirectoryKey])
-            guard values?.isDirectory == true else { return nil }
-            return ProjectFolder(name: directory.lastPathComponent, url: directory)
-        }.sorted {
-            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        var result: [ProjectFolder] = []
+        func visit(_ parent: URL, prefix: String, container: Bool) throws {
+            let entries = try fileManager.contentsOfDirectory(at: parent,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles])
+            for directory in entries {
+                guard let values = try? directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { continue }
+                guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
+                let leaf = directory.lastPathComponent
+                guard prefix.isEmpty || leaf != "meetings" else { continue }
+                let name = prefix.isEmpty ? leaf : prefix + "/" + leaf
+                if ["projects", "studies"].contains(leaf) {
+                    // A structural container may also own general meetings.
+                    if fileManager.fileExists(atPath: directory.appending(path: "meeting_context.md").path)
+                        || fileManager.fileExists(atPath: directory.appending(path: "meetings").path) {
+                        result.append(ProjectFolder(name: name, url: directory))
+                    }
+                    try? visit(directory, prefix: name, container: true)
+                } else if container || fileManager.fileExists(atPath: directory.appending(path: "meeting_context.md").path)
+                    || fileManager.fileExists(atPath: directory.appending(path: "meetings").path) {
+                    result.append(ProjectFolder(name: name, url: directory))
+                    try? visit(directory, prefix: name, container: false)
+                }
+            }
         }
+        try visit(root, prefix: "", container: true)
+        return result.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func resolveProject(_ requested: String?) throws -> ProjectFolder {
+        let name = requested ?? Self.inboxName
+        if let project = try projects().first(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
+            return project
+        }
+        if name == Self.inboxName { return try createProject(named: name) }
+        throw ArchiveError.projectMissing
+    }
+
+    func meetingContext(for name: String) throws -> String {
+        let project = try resolveProject(name)
+        var directory = root
+        var contexts: [String] = []
+        for segment in project.name.split(separator: "/") {
+            directory.append(path: String(segment))
+            let file = directory.appending(path: "meeting_context.md")
+            if fileManager.fileExists(atPath: file.path) {
+                let content = try String(contentsOf: file, encoding: .utf8)
+                guard content.components(separatedBy: .newlines).contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }) else { continue }
+                contexts.append("Context from \(directory.lastPathComponent):\n\(content)")
+            }
+        }
+        return contexts.isEmpty ? "" : "More-specific context takes precedence over general preferences.\n\n" + contexts.joined(separator: "\n\n")
     }
 
     func createProject(named value: String) throws -> ProjectFolder {
@@ -84,16 +124,15 @@ struct ArchiveStore {
         }
         let directory = root.appending(path: name, directoryHint: .isDirectory)
         try fileManager.createDirectory(at: directory.appending(path: "meetings", directoryHint: .isDirectory), withIntermediateDirectories: true)
-        try "# \(name)\n".write(to: directory.appending(path: "meeting_context.md"), atomically: true, encoding: .utf8)
+        let context = directory.appending(path: "meeting_context.md")
+        if !fileManager.fileExists(atPath: context.path) {
+            try "# \(name)\n".write(to: context, atomically: true, encoding: .utf8)
+        }
         return ProjectFolder(name: name, url: directory)
     }
 
     func projectContexts() throws -> [ProjectContext] {
-        try projects().map { project in
-            let contextURL = project.url.appending(path: "meeting_context.md")
-            let markdown = (try? String(contentsOf: contextURL, encoding: .utf8)) ?? ""
-            return ProjectContext(name: project.name, markdown: markdown)
-        }
+        try projects().map { ProjectContext(name: $0.name, markdown: try meetingContext(for: $0.name)) }
     }
 
     func globalContext() throws -> String {
@@ -136,11 +175,12 @@ struct ArchiveStore {
         let meetings = try projects().flatMap { project in
             let directory = project.url.appending(path: "meetings", directoryHint: .isDirectory)
             guard fileManager.fileExists(atPath: directory.path) else { return [ArchivedMeeting]() }
-            return try fileManager.contentsOfDirectory(
+            let entries = (try? fileManager.contentsOfDirectory(
                 at: directory,
                 includingPropertiesForKeys: [.isDirectoryKey, .creationDateKey],
                 options: [.skipsHiddenFiles]
-            ).compactMap { meeting in
+            )) ?? []
+            return entries.compactMap { meeting in
                 let values = try? meeting.resourceValues(forKeys: [.isDirectoryKey, .creationDateKey])
                 let name = meeting.lastPathComponent
                 guard values?.isDirectory == true,
@@ -210,7 +250,7 @@ enum ArchiveError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidProjectName: "Use 1–60 characters without /, :, control characters, or leading or trailing periods."
-        case .projectMissing: "The selected project folder no longer exists."
+        case .projectMissing: "The selected project folder is missing. Choose its new location before recording or importing."
         }
     }
 }

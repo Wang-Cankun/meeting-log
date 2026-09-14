@@ -29,17 +29,10 @@ struct MeetingProcessor {
 
             guard blocks.count == prepared.chunks.count else { throw ProcessingError.incompleteCoverage }
             let context = try store.globalContext()
-            let projects = try store.projectContexts()
-            let resolvedProjectName: String
-            if let requested = projectName,
-               let match = projects.first(where: { $0.name.localizedCaseInsensitiveCompare(requested) == .orderedSame }) {
-                resolvedProjectName = match.name
-            } else {
-                resolvedProjectName = try store.createProject(named: ArchiveStore.inboxName).name
-            }
-            let projectContext = projects.first { $0.name == resolvedProjectName }?.markdown ?? ""
+            let resolvedProjectName = try store.resolveProject(projectName).name
+            let projectContext = try store.meetingContext(for: resolvedProjectName)
 
-            let transcriptionContext = "Global context:\n\(context)\n\nProject: \(resolvedProjectName)\nProject context:\n\(projectContext)"
+            let transcriptionContext = "More-specific meeting context overrides general preferences; context is not evidence of spoken commitments.\nGlobal context:\n\(context)\n\nProject: \(resolvedProjectName)\nProject context:\n\(projectContext)"
             let client = client
             let chunks = prepared.chunks
             blocks = try await TranscriptionBatch.run(blocks: blocks) { index in

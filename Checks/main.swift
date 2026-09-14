@@ -1,6 +1,76 @@
 import Foundation
 import AVFoundation
 
+// Names accepted by creation remain destinations; existing context is never replaced.
+do {
+    let root = FileManager.default.temporaryDirectory.appending(path: "reserved-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ArchiveStore(root: root)
+    for name in ["meetings", "projects", "studies"] {
+        let project = try store.createProject(named: name)
+        let file = project.url.appending(path: "meeting_context.md")
+        try "KEEP_CONTEXT".write(to: file, atomically: true, encoding: .utf8)
+        _ = try store.createProject(named: name)
+        let preserved = try String(contentsOf: file, encoding: .utf8)
+        precondition(preserved == "KEEP_CONTEXT", "Recreating a project lost context")
+        let resolved = try store.resolveProject(name)
+        precondition(resolved.name == name)
+    }
+    let blocked = root.appending(path: "Blocked")
+    try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: blocked.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: blocked.path) }
+    do {
+        _ = try FileManager.default.contentsOfDirectory(atPath: blocked.path)
+        preconditionFailure("Permission fixture must actually be unreadable")
+    } catch {}
+    let available = try store.resolveProject("projects")
+    precondition(available.name == "projects", "Unreadable sibling blocked accessible project")
+    let hiddenMeetings = try store.createProject(named: "Unreadable archive").url.appending(path: "meetings")
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: hiddenMeetings.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: hiddenMeetings.path) }
+    let saved = try store.finalDirectory(projectName: "projects", title: "Accessible", startedAt: Date())
+    try FileManager.default.createDirectory(at: saved, withIntermediateDirectories: true)
+    for file in ["summary.md", "transcript.md"] {
+        try "# Accessible".write(to: saved.appending(path: file), atomically: true, encoding: .utf8)
+    }
+    let meetings = try store.recentMeetings()
+    precondition(meetings.count == 1 && meetings[0].projectName == "projects")
+    print("Project edge cases passed: reserved names, context preservation, unreadable sibling and archive")
+}
+
+// Nested destinations preserve identity, context isolation, and archived meeting discovery.
+do {
+    let root = FileManager.default.temporaryDirectory.appending(path: "nested-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ArchiveStore(root: root)
+    let hub = try store.createProject(named: "Ling_Xenium")
+    let paths = ["Ling_Xenium/projects/David", "Ling_Xenium/projects/Joshi", "Ling_Xenium/projects/David/studies/共同研究", "Ling_Xenium/projects/Joshi/studies/共同研究"]
+    for path in paths { try FileManager.default.createDirectory(at: root.appending(path: path), withIntermediateDirectories: true) }
+    try FileManager.default.createDirectory(at: hub.url.appending(path: "results/not-a-project"), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: hub.url.appending(path: "projects/escape"), withDestinationURL: root)
+    try "HUB_CONTEXT".write(to: hub.url.appending(path: "meeting_context.md"), atomically: true, encoding: .utf8)
+    try "DAVID_CONTEXT".write(to: root.appending(path: paths[0] + "/meeting_context.md"), atomically: true, encoding: .utf8)
+    try "JOSHI_PRIVATE_CONTEXT".write(to: root.appending(path: paths[1] + "/meeting_context.md"), atomically: true, encoding: .utf8)
+    let projects = try store.projects()
+    precondition(projects.count == 5)
+    precondition(Set(projects.map(\.name)).count == 5)
+    let context = try store.meetingContext(for: paths[2])
+    precondition(context.contains("HUB_CONTEXT") && context.contains("DAVID_CONTEXT") && !context.contains("JOSHI"))
+    let destination = try store.finalDirectory(projectName: paths[2], title: "测试", startedAt: Date())
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    try "# Nested summary".write(to: destination.appending(path: "summary.md"), atomically: true, encoding: .utf8)
+    try "Transcript".write(to: destination.appending(path: "transcript.md"), atomically: true, encoding: .utf8)
+    let meetings = try store.recentMeetings()
+    precondition(meetings.count == 1 && meetings[0].projectName == paths[2])
+    let afterArchive = try store.projects()
+    precondition(afterArchive.count == 5, "Meeting folders must not become projects")
+    try FileManager.default.moveItem(at: root.appending(path: paths[2]), to: root.appending(path: paths[2] + "移动"))
+    do { _ = try store.resolveProject(paths[2]); preconditionFailure("Missing destination silently accepted") } catch ArchiveError.projectMissing {}
+    do { _ = try store.resolveProject("../outside"); preconditionFailure("Path traversal accepted") } catch ArchiveError.projectMissing {}
+    print("Nested projects passed: container discovery, duplicate names, context isolation, symlink exclusion and moved destinations")
+}
+
 let cleanupSource = "# Transcript\n\n## 00:00–00:30\n\n[00:00] Speaker A: Um, we have not approved this.\n\n[00:20] Speaker B: Review on Monday, not Friday.\n"
 let cleanupExpected = cleanupSource.replacingOccurrences(of: "Um, ", with: "")
 precondition(TranscriptPolisher.acceptable(cleanupExpected, raw: cleanupSource))

@@ -46,7 +46,7 @@ menu bar panel
 
 Incomplete sessions remain under `<root>/.pending/<uuid>/` with `session.json`. Startup recovery resumes processing from that manifest. Pending sessions block archive relocation until they finish; Settings can move them to the Trash when they are no longer wanted.
 
-Project folders are the source of truth and may use Unicode names. Users create projects; the menu bar panel selects the destination project for each recording, falling back to `Inbox` when nothing valid is selected. Completed meeting folders use the recording start date followed immediately by the human-readable title, with `-2`, `-3`, and later suffixes for collisions. The menu panel lists the three most recent completed meetings; deletion moves the complete meeting directory to the macOS Trash.
+Project folders are the source of truth and may use Unicode names. Users create projects; the menu bar panel selects the destination project for each recording, using `Inbox` only when no destination was selected. Completed meeting folders use the recording start date followed immediately by the human-readable title, with `-2`, `-3`, and later suffixes for collisions. The menu panel lists the three most recent completed meetings; deletion moves the complete meeting directory to the macOS Trash.
 
 System audio uses a private Core Audio process tap and aggregate device. All Mac audio is the default; one running application can be selected by bundle identifier. The tap handles preview and writes `system-audio.caf` during recording without using the screen picker.
 
@@ -75,3 +75,9 @@ Completed block output is retained as `transcript_raw.md`. One text-only request
 The reviewed summary is saved as `summary.md`; another text-only request produces Mainland Simplified Chinese `summary_cn.md` and a short Chinese folder title. Names, technical terms, exact evidence quotes and metadata remain traceable. Folder names use `MMddyyyy-<short-title>`, bounded to 32 title characters and 96 UTF-8 bytes. Old names remain discoverable. Global and project meeting instructions live in `meeting_context.md`; general `context.md` files are not ingested.
 
 Summary regeneration previews both languages, checks both files for concurrent edits, and backs up both before replacement. Regeneration preserves transcript and folder identity.
+
+## Nested meeting destinations
+
+Project identity is the archive-relative path, including structural `projects/` and `studies/` segments. Discovery includes top-level folders, direct children of these structural containers, and nested folders with `meeting_context.md` or `meetings/`. It skips hidden directories, symlinks and meeting contents, and does not descend into ordinary unmarked data directories. Unreadable subtrees do not discard accessible siblings; a failure to read the archive root still surfaces. Structural containers with their own meeting context or meetings are also destinations, and a top-level project named `meetings` remains valid. Creating an existing destination preserves its context.
+
+The shared chooser groups destinations by their nearest project ancestor; group headings expand and General meetings selects that ancestor. Search shows parent labels, and the footer exposes the actual save location. Ancestor meeting contexts are read in outer-to-inner order, with more-specific preferences taking precedence. Sibling context is excluded. Recording snapshots the selected relative path in its manifest at start. Missing destinations remain visible and block new routing; retry can explicitly reassign pending meetings to the chosen replacement, preserving completed blocks. Retry waits until capture, import, recovery and the processing queue are idle so saved replacements cannot race with job snapshots.

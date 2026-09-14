@@ -28,7 +28,7 @@ struct SummaryRegenerator {
         let transcript = try read(meeting.url.appending(path: "transcript.md"))
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw RevisionError.emptyTranscript }
         let global = try context(store.root.appending(path: "meeting_context.md"))
-        let project = try context(meeting.url.deletingLastPathComponent().deletingLastPathComponent().appending(path: "meeting_context.md"))
+        let project = try store.meetingContext(for: meeting.projectName)
         let prompt = Prompts.analysis(transcript: transcript, globalContext: global, projectName: meeting.projectName, projectContext: project)
         let draft = try await client.complete(prompt: prompt)
         _ = try decode(draft)
@@ -59,7 +59,7 @@ struct SummaryRegenerator {
               currentChinese == revision.originalChinese,
               try read(directory.appending(path: "transcript.md")) == revision.transcript,
               try context(store.root.appending(path: "meeting_context.md")) == revision.globalContext,
-              try context(directory.deletingLastPathComponent().deletingLastPathComponent().appending(path: "meeting_context.md")) == revision.projectContext else {
+              try store.meetingContext(for: revision.meeting.projectName) == revision.projectContext else {
             throw RevisionError.changed
         }
         let history = directory.appending(path: ".summary-history/\(UUID().uuidString.lowercased())")

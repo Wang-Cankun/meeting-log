@@ -290,38 +290,11 @@ struct ControlPanel: View {
     }
 
     private var projectMenu: some View {
-        Menu {
-            Button { model.selectProject(nil) } label: {
-                if model.selectedProjectName == nil {
-                    Label("Inbox", systemImage: "checkmark")
-                } else {
-                    Text("Inbox")
-                }
-            }
-            let listed = model.projects.filter {
-                $0.name.localizedCaseInsensitiveCompare(ArchiveStore.inboxName) != .orderedSame
-            }
-            if !listed.isEmpty {
-                Divider()
-                ForEach(listed) { project in
-                    Button { model.selectProject(project.name) } label: {
-                        if model.selectedProjectName == project.name {
-                            Label(project.name, systemImage: "checkmark")
-                        } else {
-                            Text(project.name)
-                        }
-                    }
-                }
-            }
-        } label: {
-            Text(model.selectedProjectName ?? "Inbox")
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 190, alignment: .leading)
-        }
-        .menuStyle(.button)
-        .controlSize(.small)
-        .accessibilityLabel("Project for new meetings")
+        ProjectChooser(projects: model.projects, selection: Binding(
+            get: { model.selectedProjectName ?? ArchiveStore.inboxName },
+            set: { model.selectProject($0) }
+        ), refresh: model.refreshArchive)
+        .frame(maxWidth: 210)
     }
 
     private var showsProcessingStatus: Bool {
@@ -347,7 +320,8 @@ struct ControlPanel: View {
             if model.processingFailureCount > 0 {
                 Button("Retry") { model.retryFailedProcessing() }
                     .controlSize(.small)
-                    .disabled(model.isRecording || model.isChangingRecording)
+                    .disabled(!model.canRetryProcessing)
+                    .help("Retry is available when recording, import, and processing finish.")
             } else if !model.keySaved && model.waitingForProcessingCount > 0 {
                 Button("Settings") { showSettings() }.controlSize(.small)
             }

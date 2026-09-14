@@ -68,6 +68,14 @@ struct ProjectContext: Equatable {
 }
 
 struct ProjectFolder: Identifiable, Equatable {
+    var displayName: String { url.lastPathComponent }
+    var displayPath: String {
+        [parentDisplay, displayName].filter { !$0.isEmpty }.joined(separator: " › ")
+    }
+    var parentDisplay: String {
+        name.split(separator: "/").dropLast().filter { !["projects", "studies"].contains(String($0)) }.joined(separator: " › ")
+    }
+
     var id: URL { url }
     let name: String
     let url: URL

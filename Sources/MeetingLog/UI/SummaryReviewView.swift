@@ -20,53 +20,137 @@ struct SummaryReviewView: View {
     }
     private var meeting: ArchivedMeeting? { meetings.first { $0.url == selection } }
     private var busy: Bool { task != nil }
+    private var changedTitle: Bool {
+        guard let revision else { return false }
+        return revision.markdown.components(separatedBy: .newlines).first != current.components(separatedBy: .newlines).first
+    }
+
+    // Preserve newest-first order within each project and put recently active projects first.
+    private var meetingGroups: [(name: String, items: [ArchivedMeeting])] {
+        let filtered = meetings.filter {
+            query.isEmpty || ($0.title + " " + $0.projectName + " " + projectLabel($0.projectName))
+                .localizedCaseInsensitiveContains(query)
+        }
+        var groups: [(name: String, items: [ArchivedMeeting])] = []
+        for item in filtered {
+            if let index = groups.firstIndex(where: { $0.name == item.projectName }) {
+                groups[index].items.append(item)
+            } else {
+                groups.append((name: item.projectName, items: [item]))
+            }
+        }
+        return groups
+    }
+
+    private func projectLabel(_ path: String) -> String {
+        ProjectFolder(name: path, url: URL(filePath: path)).displayPath
+            .replacingOccurrences(of: "_", with: " ")
+    }
 
     var body: some View {
         HSplitView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Meetings").font(.title2.bold())
-                TextField("Search meetings or projects", text: $query)
-                    .textFieldStyle(.roundedBorder)
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Meetings").font(.system(size: 18, weight: .semibold))
+                        Spacer()
+                        Button(action: reload) { Image(systemName: "arrow.clockwise") }
+                            .buttonStyle(.borderless).help("Refresh meetings")
+                            .accessibilityLabel("Refresh meetings").disabled(busy || revision != nil)
+                    }
+                    TextField("Search meetings or projects", text: $query)
+                        .textFieldStyle(.roundedBorder)
+                }.padding(20)
+                Divider()
                 List(selection: $selection) {
-                    ForEach(meetings.filter { query.isEmpty || ($0.title + $0.projectName).localizedCaseInsensitiveContains(query) }) { item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title).lineLimit(2)
-                            Text("\(item.projectName) · \(item.date.formatted(date: .abbreviated, time: .omitted))")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }.tag(item.url)
+                    ForEach(meetingGroups, id: \.name) { group in
+                        Section {
+                            ForEach(group.items) { item in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(item.title)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .lineLimit(3)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Text(item.date.formatted(date: .abbreviated, time: .omitted))
+                                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 4)
+                                .tag(item.url)
+                                .help(item.title)
+                                .listRowSeparator(.visible)
+                            }
+                        } header: {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(projectLabel(group.name))
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 0)
+                                Text(group.items.count.formatted())
+                                    .font(.system(size: 11)).monospacedDigit()
+                            }
+                            .foregroundStyle(.secondary)
+                            .textCase(nil)
+                            .padding(.top, 8).padding(.bottom, 4)
+                        }
                     }
                 }
                 .disabled(busy || revision != nil)
-                Button("Refresh meetings", action: reload).disabled(busy || revision != nil)
-            }.padding().frame(minWidth: 220, idealWidth: 260, maxWidth: 340)
+                .listStyle(.plain)
+                .padding(.horizontal, 12)
+                .scrollContentBackground(.hidden)
+                .overlay {
+                    if meetingGroups.isEmpty {
+                        ContentUnavailableView(query.isEmpty ? "No meetings yet" : "No matching meetings",
+                            systemImage: query.isEmpty ? "tray" : "magnifyingglass",
+                            description: Text(query.isEmpty ? "Completed meetings appear here." : "Try another title or project."))
+                    }
+                }
+            }.frame(width: 260)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(Color(nsColor: .windowBackgroundColor))
 
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 if let meeting {
-                    Text(meeting.title).font(.title2.bold()).textSelection(.enabled)
-                    Text("Generate a new summary from the saved transcript and current project context.")
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(meeting.title).font(.system(size: 18, weight: .semibold))
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        Text("\(meeting.projectName.replacingOccurrences(of: "/", with: " › ")) · \(current.components(separatedBy: .newlines).first(where: { $0.hasPrefix("- Date: ") }).map { String($0.dropFirst(8)) } ?? meeting.date.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                     if missingContext {
                         Label("Project context is empty. Add confirmed participants, terms, and handoff locations to improve this summary.", systemImage: "info.circle")
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    HStack {
+                    HStack(spacing: 12) {
+                        Picker("Summary language", selection: $chinesePreview) {
+                            Text("Original").tag(false)
+                            Text("简体中文").tag(true)
+                        }.pickerStyle(.segmented).labelsHidden().frame(width: 220, alignment: .leading)
+                        Spacer(minLength: 8)
+                        Menu {
                         Button("Open transcript") { NSWorkspace.shared.open(meeting.url.appending(path: "transcript.md")) }
-                        Button("Open meeting context") { NSWorkspace.shared.open(meeting.url.deletingLastPathComponent().deletingLastPathComponent().appending(path: "meeting_context.md")) }
-                        Spacer()
+                        Button("Open meeting context") {
+                            let file = meeting.url.deletingLastPathComponent().deletingLastPathComponent().appending(path: "meeting_context.md")
+                            do {
+                                if !FileManager.default.fileExists(atPath: file.path) {
+                                    try "# Meeting context\n".write(to: file, atomically: true, encoding: .utf8)
+                                }
+                                NSWorkspace.shared.open(file)
+                            } catch { self.error = error.localizedDescription }
+                        }
                         Button("Show in Finder") { model.showInFinder(meeting.url) }
-                    }
+                        } label: { Label("Files", systemImage: "folder") }
+                    }.controlSize(.regular)
                     if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                     if saved { Label("Summary saved. The previous version is backed up.", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
-                    Picker("Summary language", selection: $chinesePreview) {
-                        Text("Original language").tag(false)
-                        Text("简体中文").tag(true)
-                    }.pickerStyle(.segmented).labelsHidden()
-                    HSplitView {
-                        preview("Current summary", text: chinesePreview ? ((try? String(contentsOf: meeting.url.appending(path: "summary_cn.md"), encoding: .utf8)) ?? "No Chinese summary yet.") : current)
-                        if let revision { preview("New summary", text: chinesePreview ? revision.chineseMarkdown : revision.markdown) }
+                    HStack(alignment: .top, spacing: 16) {
+                        preview("Current summary", text: chinesePreview ? ((try? String(contentsOf: meeting.url.appending(path: "summary_cn.md"), encoding: .utf8)) ?? "No Chinese summary yet.") : current, showTitle: chinesePreview || changedTitle)
+                        if let revision { preview("New summary", text: chinesePreview ? revision.chineseMarkdown : revision.markdown, showTitle: chinesePreview || changedTitle) }
                     }
-                    Text("Transcript and context are sent to \(URL(string: model.providerBaseURL)?.host ?? "your configured provider") · \(model.selectedModelID). Audio is not uploaded.")
+                    Divider()
+                    Text("Uses saved transcript and meeting context · \(URL(string: model.providerBaseURL)?.host ?? "configured provider")")
                         .font(.caption).foregroundStyle(.secondary)
+                        .help("Model: \(model.selectedModelID). Audio is not uploaded. Both summary languages are generated.")
                     HStack {
                         if busy {
                             ProgressView().controlSize(.small)
@@ -74,8 +158,7 @@ struct SummaryReviewView: View {
                             Spacer()
                             Button("Cancel") { cancel() }
                         } else if revision != nil {
-                            Text("Review both versions before saving.").font(.caption).foregroundStyle(.secondary)
-                            Spacer()
+                            Spacer(minLength: 0)
                             Button("Discard preview") { revision = nil; error = nil }
                             Button("Save new summary", action: save).buttonStyle(.borderedProminent)
                         } else {
@@ -89,7 +172,7 @@ struct SummaryReviewView: View {
                 } else {
                     ContentUnavailableView("Choose a meeting", systemImage: "doc.text", description: Text("Completed meetings with saved transcripts appear here."))
                 }
-            }.padding(24).frame(minWidth: 550, maxWidth: .infinity, maxHeight: .infinity)
+            }.padding(20).frame(minWidth: 550, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 850, minHeight: 550)
         .onAppear {
@@ -103,17 +186,27 @@ struct SummaryReviewView: View {
         .onDisappear { cancel() }
     }
 
-    private func preview(_ title: String, text: String) -> some View {
+    private func preview(_ title: String, text: String, showTitle: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.headline)
             ScrollView {
-                SummaryMarkdownView(markdown: text)
+                SummaryMarkdownView(markdown: previewBody(text, showTitle: showTitle))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(16)
             }
             .background(.background, in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
-        }.frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
+        }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
     }
+    // Identity is already displayed once in the shared header. Saved Markdown stays intact.
+    private func previewBody(_ markdown: String, showTitle: Bool) -> String {
+        var inPreamble = true
+        return markdown.components(separatedBy: .newlines).filter { line in
+            if line.hasPrefix("## ") { inPreamble = false }
+            if inPreamble && ((!showTitle && line.hasPrefix("# ")) || line.hasPrefix("- Date: ") || line.hasPrefix("- Project: ")) { return false }
+            return true
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func errorFreeTranscript(_ meeting: ArchivedMeeting) -> Bool {
         FileManager.default.fileExists(atPath: meeting.url.appending(path: "transcript.md").path)
     }
@@ -135,8 +228,7 @@ struct SummaryReviewView: View {
     private func loadCurrent() {
         error = nil; saved = false; revision = nil
         guard let meeting else { current = ""; return }
-        let contextURL = meeting.url.deletingLastPathComponent().deletingLastPathComponent().appending(path: "meeting_context.md")
-        let context = (try? String(contentsOf: contextURL, encoding: .utf8)) ?? ""
+        let context = (try? store.meetingContext(for: meeting.projectName)) ?? ""
         missingContext = context.components(separatedBy: .newlines).allSatisfy {
             let line = $0.trimmingCharacters(in: .whitespaces)
             return line.isEmpty || line.hasPrefix("#")
@@ -166,6 +258,7 @@ struct SummaryReviewView: View {
         do {
             try service.save(revision)
             current = revision.markdown
+            if let refreshed = try? store.recentMeetings(limit: Int.max) { meetings = refreshed }
             self.revision = nil; error = nil; saved = true
         } catch { self.error = error.localizedDescription }
     }

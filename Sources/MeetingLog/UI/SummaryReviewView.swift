@@ -13,6 +13,7 @@ struct SummaryReviewView: View {
     @State private var query = ""
     @State private var missingContext = false
     @State private var chinesePreview = false
+    @State private var pendingArchiveRefresh = false
 
     private var store: ArchiveStore { ArchiveStore(root: URL(filePath: model.archiveRootPath)) }
     private var service: SummaryRegenerator {
@@ -180,10 +181,34 @@ struct SummaryReviewView: View {
         }
         .onChange(of: selection) { _, _ in loadCurrent() }
         .onChange(of: model.summaryOpenRequest) { _, _ in applyOpenRequest() }
-        .onChange(of: busy) { _, _ in applyOpenRequest() }
-        .onChange(of: revision == nil) { _, _ in applyOpenRequest() }
-        .onChange(of: model.archiveRootPath) { _, _ in cancel(); revision = nil; selection = nil; reload() }
-        .onDisappear { cancel() }
+        .onChange(of: busy) { _, value in
+            if !value && revision == nil && pendingArchiveRefresh {
+                pendingArchiveRefresh = false; reload()
+            }
+            applyOpenRequest()
+        }
+        .onChange(of: revision == nil) { _, empty in
+            if empty, !busy {
+                if let selection { model.summaryLockedURLs.remove(selection) }
+                if pendingArchiveRefresh { pendingArchiveRefresh = false; reload() }
+            }
+            applyOpenRequest()
+        }
+        .onChange(of: model.lastMeetingMove) { _, move in
+            guard let move else { return }
+            if selection == move.source { selection = move.destination }
+            if !busy && revision == nil { reload() }
+            else { pendingArchiveRefresh = true }
+        }
+        .onChange(of: model.archiveRootPath) { _, _ in
+            cancel()
+            if !busy, let selection { model.summaryLockedURLs.remove(selection) }
+            revision = nil; selection = nil; pendingArchiveRefresh = false; reload()
+        }
+        .onDisappear {
+            cancel()
+            if !busy, let selection { model.summaryLockedURLs.remove(selection); revision = nil }
+        }
     }
 
     private func preview(_ title: String, text: String, showTitle: Bool = false) -> some View {
@@ -240,8 +265,12 @@ struct SummaryReviewView: View {
         guard let meeting, !busy else { return }
         error = nil; saved = false
         let generator = service
+        model.summaryLockedURLs.insert(meeting.url)
         task = Task { @MainActor in
-            defer { task = nil }
+            defer {
+                task = nil
+                if revision == nil { model.summaryLockedURLs.remove(meeting.url) }
+            }
             do {
                 let result = try await generator.generate(for: meeting)
                 try Task.checkCancellation()

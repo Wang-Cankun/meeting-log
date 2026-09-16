@@ -44,6 +44,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var waitingForProcessingCount = 0
     @Published private(set) var isChangingRecording = false
     @Published private(set) var projects: [ProjectFolder] = []
+    @Published var meetingToMove: ArchivedMeeting?
+    @Published var summaryLockedURLs: Set<URL> = []
+    @Published var lastMeetingMove: MeetingMove?
     @Published var summaryOpenRequest: SummaryOpenRequest?
     @Published private(set) var recentMeetings: [ArchivedMeeting] = []
     @Published var selectedProjectName = UserDefaults.standard.string(forKey: AppModel.projectDefaultsKey)
@@ -288,6 +291,22 @@ final class AppModel: ObservableObject {
             showError("Pending meetings were not discarded: \(error.localizedDescription)")
         }
         refreshArchive()
+    }
+
+    func canMoveMeeting(_ meeting: ArchivedMeeting) -> Bool {
+        !isRecording && !isChangingRecording && !isProcessing && !isImporting
+            && !summaryLockedURLs.contains(meeting.url)
+    }
+
+    func moveMeeting(_ meeting: ArchivedMeeting, to project: String) throws -> ArchivedMeeting {
+        guard canMoveMeeting(meeting) else {
+            throw NSError(domain: "MeetingLog", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                "Finish recording, processing, or reviewing this meeting’s summary before moving it."])
+        }
+        let moved = try recordingStore().moveMeeting(meeting, to: project)
+        refreshArchive()
+        lastMeetingMove = MeetingMove(source: meeting.url, destination: moved.url)
+        return moved
     }
 
     func deleteMeeting(_ meeting: ArchivedMeeting) {
@@ -776,4 +795,9 @@ enum AppConfigurationError: LocalizedError {
         case .apiKey: "Save an API provider configuration first."
         }
     }
+}
+
+struct MeetingMove: Equatable {
+    let source: URL
+    let destination: URL
 }

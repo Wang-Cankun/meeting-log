@@ -1,6 +1,70 @@
 import Foundation
 import AVFoundation
 
+// Completed meeting moves preserve media/history and change only project metadata.
+do {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appending(path: "move-\(UUID())")
+    defer { try? fm.removeItem(at: root) }
+    let store = ArchiveStore(root: root)
+    _ = try store.createProject(named: "Original")
+    _ = try store.createProject(named: "Hub")
+    let nested = root.appending(path: "Hub/projects/新项目")
+    try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+    let source = try store.finalDirectory(projectName: "Original", title: "Meeting", startedAt: Date())
+    try fm.createDirectory(at: source.appending(path: ".summary-history/revision"), withIntermediateDirectories: true)
+    let summary = "# Meeting\n\n- Date: 2026-09-16\n- Project: Original\n\n## Summary\nUnchanged evidence.\n- Project: quoted body line\n"
+    for name in ["summary.md", "summary_cn.md"] {
+        try summary.write(to: source.appending(path: name), atomically: true, encoding: .utf8)
+    }
+    for name in ["transcript.md", "audio.m4a", ".summary-history/revision/provenance.json"] {
+        try Data("KEEP_\(name)".utf8).write(to: source.appending(path: name))
+    }
+    let meeting = try store.recentMeetings().first!
+    let unchanged = try store.moveMeeting(meeting, to: "Original")
+    precondition(unchanged == meeting)
+    do { _ = try store.moveMeeting(meeting, to: "Missing"); preconditionFailure("Missing destination accepted") } catch {}
+    precondition(fm.fileExists(atPath: source.path))
+    let collision = nested.appending(path: "meetings/" + source.lastPathComponent)
+    try fm.createDirectory(at: collision, withIntermediateDirectories: true)
+    let moved = try store.moveMeeting(meeting, to: "Hub/projects/新项目")
+    precondition(moved.url.lastPathComponent == source.lastPathComponent + "-2")
+    precondition(!fm.fileExists(atPath: source.path))
+    precondition(fm.fileExists(atPath: collision.path))
+    for name in ["summary.md", "summary_cn.md"] {
+        let text = try String(contentsOf: moved.url.appending(path: name), encoding: .utf8)
+        precondition(text == summary.replacingOccurrences(of: "- Project: Original", with: "- Project: Hub/projects/新项目"))
+    }
+    for name in ["transcript.md", "audio.m4a", ".summary-history/revision/provenance.json"] {
+        let data = try Data(contentsOf: moved.url.appending(path: name))
+        precondition(data == Data("KEEP_\(name)".utf8))
+    }
+    // A malformed summary must leave the complete source in place.
+    try "# No metadata".write(to: moved.url.appending(path: "summary_cn.md"), atomically: true, encoding: .utf8)
+    do { _ = try store.moveMeeting(moved, to: "Original"); preconditionFailure("Invalid metadata accepted") } catch {}
+    precondition(fm.fileExists(atPath: moved.url.appending(path: "audio.m4a").path))
+    // No translated summary is required; moving back remains possible.
+    try fm.removeItem(at: moved.url.appending(path: "summary_cn.md"))
+    let back = try store.moveMeeting(moved, to: "Original")
+    precondition(back.url.lastPathComponent == moved.url.lastPathComponent)
+    precondition(back.projectName == "Original")
+    // A destination that cannot be written must not disturb the source.
+    let parent = nested.appending(path: "meetings")
+    try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: parent.path)
+    defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path) }
+    do { _ = try store.moveMeeting(back, to: "Hub/projects/新项目"); preconditionFailure("Unwritable destination accepted") } catch {}
+    let preserved = try String(contentsOf: back.url.appending(path: "summary.md"), encoding: .utf8)
+    precondition(preserved == summary)
+    try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path)
+    // Moving the folder succeeds, but metadata writes fail. The move must roll back.
+    try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: back.url.path)
+    defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: back.url.path) }
+    do { _ = try store.moveMeeting(back, to: "Hub/projects/新项目"); preconditionFailure("Metadata write unexpectedly succeeded") } catch {}
+    precondition(fm.fileExists(atPath: back.url.appending(path: "audio.m4a").path))
+    let restored = try String(contentsOf: back.url.appending(path: "summary.md"), encoding: .utf8)
+    precondition(restored == summary)
+}
+
 // Names accepted by creation remain destinations; existing context is never replaced.
 do {
     let root = FileManager.default.temporaryDirectory.appending(path: "reserved-\(UUID())")

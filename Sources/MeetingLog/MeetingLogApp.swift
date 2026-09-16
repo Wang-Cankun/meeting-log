@@ -28,6 +28,13 @@ struct MeetingLogApp: App {
         .defaultSize(width: 1000, height: 720)
         .defaultLaunchBehavior(.suppressed)
 
+        Window("Move meeting", id: "move-meeting") {
+            MoveMeetingView(model: model)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .defaultLaunchBehavior(.suppressed)
+
         Settings {
             SettingsView(model: model)
         }

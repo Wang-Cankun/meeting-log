@@ -33,6 +33,15 @@ extension AppModel {
         model.isImporting = true
         try expectBlocked("import")
         model.isImporting = false
+        let meeting = ArchivedMeeting(title: "Fixture", projectName: "Inbox", dateText: "", date: Date(), createdAt: Date(), url: directory)
+        precondition(model.canMoveMeeting(meeting))
+        model.summaryLockedURLs.insert(directory)
+        precondition(!model.canMoveMeeting(meeting), "Unsaved summary must block moving")
+        do { _ = try model.moveMeeting(meeting, to: "Inbox"); preconditionFailure("Locked move accepted") } catch {}
+        model.summaryLockedURLs.remove(directory)
+        model.isImporting = true
+        precondition(!model.canMoveMeeting(meeting))
+        model.isImporting = false
         model.retryFailedProcessing()
         precondition(model.processingFailureCount == 0, "Idle retry must remain available")
         print("AppModel retry passed: queued, active, recovery, import, and idle states")

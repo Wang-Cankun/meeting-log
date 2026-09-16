@@ -415,6 +415,12 @@ struct ControlPanel: View {
                                 openWindow(id: "meeting-summaries")
                                 NSApplication.shared.activate(ignoringOtherApps: true)
                             }
+                            Button("Move to project…", systemImage: "folder.badge.arrowshape.forward") {
+                                model.meetingToMove = meeting
+                                openWindow(id: "move-meeting")
+                                NSApplication.shared.activate(ignoringOtherApps: true)
+                            }
+                            .disabled(!model.canMoveMeeting(meeting))
                             Button("Show in Finder", systemImage: "folder") { model.showInFinder(meeting.url) }
                             Divider()
                             Button("Move to Trash", systemImage: "trash", role: .destructive) { model.deleteMeeting(meeting) }

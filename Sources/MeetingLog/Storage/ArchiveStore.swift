@@ -171,6 +171,76 @@ struct ArchiveStore {
         return destination
     }
 
+    /// Move the archive as a unit; generation history remains a record of its original context.
+    func moveMeeting(_ meeting: ArchivedMeeting, to projectName: String) throws -> ArchivedMeeting {
+        let sourceProject = try resolveProject(meeting.projectName)
+        let destinationProject = try resolveProject(projectName)
+        let source = meeting.url.standardizedFileURL
+        guard source.deletingLastPathComponent().path == sourceProject.url.appending(path: "meetings").standardizedFileURL.path,
+              try source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true,
+              fileManager.fileExists(atPath: source.appending(path: "transcript.md").path) else {
+            throw ArchiveError.invalidMeeting
+        }
+        if sourceProject.name == destinationProject.name { return meeting }
+        let parent = destinationProject.url.appending(path: "meetings", directoryHint: .isDirectory)
+        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        guard parent.resolvingSymlinksInPath().standardizedFileURL.path == parent.standardizedFileURL.path else {
+            throw ArchiveError.invalidMeeting
+        }
+        var destination = parent.appending(path: source.lastPathComponent, directoryHint: .isDirectory)
+        var suffix = 2
+        while fileManager.fileExists(atPath: destination.path) {
+            destination = parent.appending(path: "\(source.lastPathComponent)-\(suffix)", directoryHint: .isDirectory)
+            suffix += 1
+        }
+        var originals: [String: Data] = [:]
+        var replacements: [String: Data] = [:]
+        for name in ["summary.md", "summary_cn.md"] {
+            let file = source.appending(path: name)
+            if name == "summary_cn.md", !fileManager.fileExists(atPath: file.path) { continue }
+            guard try file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+                throw ArchiveError.invalidMeeting
+            }
+            let data = try Data(contentsOf: file)
+            guard let text = String(data: data, encoding: .utf8) else { throw ArchiveError.invalidMeeting }
+            var preamble = true
+            var found = false
+            let updated = text.components(separatedBy: "\n").map { line -> String in
+                if line.hasPrefix("## ") { preamble = false }
+                if preamble && !found && line.hasPrefix("- Project: ") {
+                    found = true
+                    return "- Project: \(destinationProject.name)"
+                }
+                return line
+            }.joined(separator: "\n")
+            guard found else { throw ArchiveError.invalidMeeting }
+            originals[name] = data
+            replacements[name] = Data(updated.utf8)
+        }
+        try fileManager.moveItem(at: source, to: destination)
+        var changed: [String] = []
+        do {
+            for name in replacements.keys.sorted() {
+                try replacements[name]!.write(to: destination.appending(path: name), options: .atomic)
+                changed.append(name)
+            }
+        } catch {
+            let failure = error
+            do {
+                for name in changed.reversed() {
+                    try originals[name]!.write(to: destination.appending(path: name), options: .atomic)
+                }
+                try fileManager.moveItem(at: destination, to: source)
+            } catch {
+                throw NSError(domain: "MeetingLog", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                    "The move could not be rolled back. The complete meeting folder is at \(destination.path). \(error.localizedDescription)"])
+            }
+            throw failure
+        }
+        return ArchivedMeeting(title: meeting.title, projectName: destinationProject.name, dateText: meeting.dateText,
+                               date: meeting.date, createdAt: meeting.createdAt, url: destination)
+    }
+
     func recentMeetings(limit: Int = 3) throws -> [ArchivedMeeting] {
         let meetings = try projects().flatMap { project in
             let directory = project.url.appending(path: "meetings", directoryHint: .isDirectory)
@@ -245,10 +315,12 @@ struct ArchiveStore {
 
 enum ArchiveError: LocalizedError {
     case invalidProjectName
+    case invalidMeeting
     case projectMissing
 
     var errorDescription: String? {
         switch self {
+        case .invalidMeeting: "The meeting files or project metadata are missing or invalid. Refresh the archive before moving this meeting."
         case .invalidProjectName: "Use 1–60 characters without /, :, control characters, or leading or trailing periods."
         case .projectMissing: "The selected project folder is missing. Choose its new location before recording or importing."
         }

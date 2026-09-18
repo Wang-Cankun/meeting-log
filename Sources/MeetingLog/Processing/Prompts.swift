@@ -23,9 +23,11 @@ enum Prompts {
         """
     }
 
-    static func analysis(transcript: String, globalContext: String, projectName: String, projectContext: String) -> String {
+    static func analysis(evidence: SummaryEvidence, globalContext: String, projectName: String, projectContext: String) -> String {
         """
         Create an evidence-grounded operational meeting record for project "\(projectName)".
+
+        The authoritative evidence is \(evidence.source.rawValue). Every L-number below refers to that file. Use only this transcription as evidence of speech; readable editorial copies are not evidence. \(evidence.source == .legacy ? "This is a legacy archive without an original transcription; make that source limitation explicit in uncertainties." : "Preserve the original transcription's negations, uncertainty, attribution, and exact quotes.")
 
         Work in this order:
         1. Read the full transcript. Separate background, discussion, proposals, agreed decisions, and follow-up commitments. Treat separate recordings as separate evidence; their playback order does not prove chronology or agreement across files.
@@ -63,14 +65,16 @@ enum Prompts {
         \(projectContext.isEmpty ? "None provided." : projectContext)
         </project_context>
         <transcript>
-        \(TranscriptEvidence.annotated(transcript))
+        \(TranscriptEvidence.annotated(evidence.text))
         </transcript>
         """
     }
 
-    static func review(analysis: String, transcript: String, context: String) -> String {
+    static func review(analysis: String, evidence: SummaryEvidence, context: String) -> String {
         """
         Audit this draft meeting record against the transcript and reference context. Return the corrected JSON object with the same schema. Preserve supported content and make only evidence-based corrections.
+
+        The authoritative evidence is \(evidence.source.rawValue); L numbers and exact quotes must refer to this file. Remove or downgrade claims that its wording does not support, including any reversed negation or certainty. An edited transcript or the draft itself cannot supply missing evidence. \(evidence.source == .legacy ? "The original transcription is unavailable in this legacy archive; retain that source limitation in uncertainties." : "")
 
         First independently scan the entire transcript for omitted outcomes. Add missing access deadlines, separate milestones, unresolved choices, future work, and operational inventory using the draft's schema. Every action, decision, and entry in milestones/openQuestions/deferredWork/inventory requires an evidence array with transcript line numbers and exact supporting quotes. Keep references grounded in the L-numbered transcript; never fabricate quotes or use project context as proof of agreement.
         Then check each field independently:
@@ -87,7 +91,7 @@ enum Prompts {
         \(context)
         </reference_context>
         <transcript>
-        \(TranscriptEvidence.annotated(transcript))
+        \(TranscriptEvidence.annotated(evidence.text))
         </transcript>
         <draft>
         \(analysis)

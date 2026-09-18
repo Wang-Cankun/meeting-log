@@ -42,6 +42,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var processingCount = 0
     @Published private(set) var processingFailureCount = 0
     @Published private(set) var waitingForProcessingCount = 0
+    @Published private(set) var pendingFailureText: String?
     @Published private(set) var isChangingRecording = false
     @Published private(set) var projects: [ProjectFolder] = []
     @Published var meetingToMove: ArchivedMeeting?
@@ -96,6 +97,8 @@ final class AppModel: ObservableObject {
     var isProcessing: Bool { processingCount > 0 }
 
     var hasScreenSource: Bool { selectedScreenSource != nil }
+
+    var canSelectRecordingProject: Bool { !isRecording && !isChangingRecording }
 
     var canStartRecording: Bool {
         guard !isRecording, !isChangingRecording, !archiveRootPath.isEmpty else { return false }
@@ -207,6 +210,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectProject(_ name: String?) {
+        guard canSelectRecordingProject else { return }
         selectedProjectName = name
         if let name {
             UserDefaults.standard.set(name, forKey: Self.projectDefaultsKey)
@@ -216,6 +220,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectSystemAudio(_ application: CaptureApplication?) {
+        guard !isRecording, !isChangingRecording else { return }
         selectedSystemAudioBundleID = application?.bundleIdentifier
         selectedSystemAudioName = application?.name ?? "All Mac audio"
         schedulePreviewRestart()
@@ -340,6 +345,10 @@ final class AppModel: ObservableObject {
             && processingTask == nil && currentProcessingPath == nil && processingQueue.isEmpty
     }
 
+    var showsRecoveryActions: Bool {
+        processingFailureCount > 0 || (waitingForProcessingCount > 0 && !isProcessing)
+    }
+
     func retryFailedProcessing() {
         guard canRetryProcessing else { return }
         do {
@@ -368,6 +377,10 @@ final class AppModel: ObservableObject {
         Task { await resumePendingSessions() }
     }
 
+    func showPendingMeetingsInFinder() {
+        showInFinder(URL(filePath: archiveRootPath).appending(path: ".pending"))
+    }
+
     private func startRecording() {
         let generation = nextPreviewGeneration()
         Task {
@@ -377,6 +390,10 @@ final class AppModel: ObservableObject {
                 let store = try recordingStore()
                 startStore = store
                 await stopPreviewMonitoring(generation: generation)
+                refreshApplications()
+                guard selectedSystemAudioIsAvailable else {
+                    throw CaptureError.recordingFailed("The selected audio application is unavailable. Reopen it or choose another source.")
+                }
                 let recordsMicrophone = microphoneEnabled
                     && microphonePermission == .authorized
                     && !microphones.isEmpty
@@ -417,6 +434,7 @@ final class AppModel: ObservableObject {
                 pendingCaptureFailure = nil
                 phase = .failed(error.localizedDescription)
                 isChangingRecording = false
+                refreshPendingStatus()
                 schedulePreviewStart()
             }
         }
@@ -447,6 +465,7 @@ final class AppModel: ObservableObject {
                 currentManifest = nil
                 phase = .failed(failure)
                 isChangingRecording = false
+                refreshPendingStatus()
                 schedulePreviewStart()
                 return
             }
@@ -467,12 +486,7 @@ final class AppModel: ObservableObject {
             }
 
             do {
-                let microphoneURL = directory.appending(path: "microphone.m4a")
-                try await MediaProcessor().makeCaptureMovie(
-                    systemAudio: directory.appending(path: "system-audio.caf"),
-                    microphone: FileManager.default.fileExists(atPath: microphoneURL.path) ? microphoneURL : nil,
-                    destination: directory.appending(path: "capture.mov")
-                )
+                _ = try await CapturePreparation.prepare(in: directory)
                 manifest.status = .captured
                 let store = try recordingStore()
                 try store.write(manifest, to: directory)
@@ -488,9 +502,9 @@ final class AppModel: ObservableObject {
                 if let store = try? recordingStore() { try? store.write(manifest, to: directory) }
                 currentDirectory = nil
                 currentManifest = nil
-                processingFailureCount += 1
                 phase = .failed(error.localizedDescription)
                 isChangingRecording = false
+                refreshPendingStatus()
                 schedulePreviewStart()
             }
         }
@@ -558,10 +572,6 @@ final class AppModel: ObservableObject {
 
     private func refreshApplications() {
         applications = SystemAudioCapture.applications()
-        if selectedSystemAudioBundleID != nil, !selectedSystemAudioIsAvailable {
-            selectedSystemAudioBundleID = nil
-            selectedSystemAudioName = "All Mac audio"
-        }
     }
 
     func importAudio(_ urls: [URL], date: Date, projectName: String?) async throws {
@@ -588,36 +598,38 @@ final class AppModel: ObservableObject {
               !isResumingPendingSessions
         else { return }
         isResumingPendingSessions = true
-        defer { isResumingPendingSessions = false }
+        defer { isResumingPendingSessions = false; refreshPendingStatus() }
         let store = ArchiveStore(root: URL(filePath: archiveRootPath, directoryHint: .isDirectory))
         guard let sessions = try? store.pendingSessions() else { return }
         var recoverable: [(URL, SessionManifest)] = []
         for (directory, originalManifest) in sessions {
-            guard directory != currentDirectory else { continue }
+            guard directory != currentDirectory, directory.path != currentProcessingPath,
+                  !processingQueue.contains(where: { $0.directory == directory }) else { continue }
             var manifest = originalManifest
-            guard let input = MediaProcessor.pendingInput(in: directory) else { continue }
-            if case let .raw(systemAudio, microphone) = input {
+            guard let input = MediaProcessor.pendingInput(in: directory) else {
+                manifest.status = .failed
+                manifest.lastError = "No usable audio was found. Open the saved files to inspect this recording."
+                try? store.write(manifest, to: directory)
+                continue
+            }
+            let needsCapturePreparation: Bool
+            switch input {
+            case .raw: needsCapturePreparation = true
+            case let .combined(url): needsCapturePreparation = url.lastPathComponent == "capture.mov"
+            case .importedParts: needsCapturePreparation = false
+            }
+            if needsCapturePreparation {
                 do {
-                    try await MediaProcessor().makeCaptureMovie(
-                        systemAudio: systemAudio,
-                        microphone: microphone,
-                        destination: directory.appending(path: "capture.mov")
-                    )
+                    _ = try await CapturePreparation.prepare(in: directory)
+                    manifest.status = .captured
+                    manifest.lastError = nil
+                    try store.write(manifest, to: directory)
                 } catch {
-                    if microphone != nil {
-                        try? await MediaProcessor().makeCaptureMovie(
-                            systemAudio: systemAudio,
-                            microphone: nil,
-                            destination: directory.appending(path: "capture.mov")
-                        )
-                    }
-                }
-                guard FileManager.default.fileExists(atPath: directory.appending(path: "capture.mov").path) else {
+                    manifest.status = .failed
+                    manifest.lastError = error.localizedDescription
+                    try? store.write(manifest, to: directory)
                     continue
                 }
-                manifest.status = .captured
-                manifest.lastError = nil
-                try? store.write(manifest, to: directory)
             }
             recoverable.append((directory, manifest))
         }
@@ -662,12 +674,13 @@ final class AppModel: ObservableObject {
                 if !isRecording { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
             } catch {
                 if case ProviderError.authentication = error { keySaved = false }
-                processingFailureCount += 1
                 processingText = error.localizedDescription
             }
             currentProcessingPath = nil
+            refreshPendingStatus()
         }
         processingCount = 0
+        refreshPendingStatus()
         if processingFailureCount == 0 { processingText = nil }
         processingTask = nil
     }
@@ -747,7 +760,17 @@ final class AppModel: ObservableObject {
         }
         projects = (try? store.projects()) ?? []
         recentMeetings = (try? store.recentMeetings()) ?? []
+        refreshPendingStatus()
+    }
 
+    private func refreshPendingStatus() {
+        guard let store = try? recordingStore(), let sessions = try? store.pendingSessions() else { return }
+        let pending = sessions.filter { $0.0 != currentDirectory }
+        waitingForProcessingCount = pending.count
+        let busyPaths = Set(processingQueue.map { $0.directory.path } + [currentProcessingPath].compactMap { $0 })
+        let failures = pending.filter { $0.1.status == .failed && !busyPaths.contains($0.0.path) }
+        processingFailureCount = failures.count
+        pendingFailureText = failures.first?.1.lastError
     }
 
     private var canManageArchive: Bool {

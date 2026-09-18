@@ -21,6 +21,8 @@
 | Recording precedes AI configuration | accepted | Missing provider configuration leaves a recoverable local session and never blocks capture |
 | Core Audio owns system audio | accepted | System audio uses its dedicated privacy permission; ScreenCaptureKit is requested only for optional video |
 | Timer-led recording panel | accepted | The panel shows elapsed time while recording; the menu bar uses a static recording indicator because self-updating SwiftUI content in a `MenuBarExtra` label caused an unbounded redraw loop on macOS 26 |
+| Explicit partial recovery | accepted | A permanent preparing/ready receipt records complete versus system-only mixing before media publication; excluded original tracks and fixed bilingual warnings survive archiving and regeneration |
+| Original transcription owns summary evidence | accepted | Drafts, review and line references use raw transcription; only old archives without it fall back to the readable transcript, with the source stated explicitly |
 
 Prompt changes and evaluation criteria are documented in [prompt quality](prompt-quality.md); project authors can use the [context template](templates/project-context.md).
 
@@ -29,6 +31,8 @@ Prompt changes and evaluation criteria are documented in [prompt quality](prompt
 Saved meetings expose regeneration through All meetings and each recent meeting's action menu. Generation sends only the existing transcript and current global/project context through the draft and evidence-review steps. Users compare the current and proposed Markdown before explicitly saving; generation and cancellation do not replace files.
 
 Saving preserves the existing date, directory, transcript, and media. The proposed summary includes a regenerated full title, and the meeting list reads that title from Markdown. It derives the project from the current folder and rejects a preview if the summary, transcript, or context changed meanwhile. Before atomic replacement, `.summary-history/<revision-id>/` retains `previous.md`, `replacement.md`, and `provenance.json` with the exact prompts, context, endpoint and model (never the API key). A previous summary can be restored by copying `previous.md` back to `summary.md`.
+
+Raw and readable transcription are checked separately, including file addition or removal; the recovery receipt also participates in conflict detection. The evidence source is saved in provenance and both summaries. We retain advisory reference matching: using the original transcription prevents editorial changes from becoming self-validating evidence, but does not prove that transcription or model interpretation is factually correct.
 
 ## Operational summary evidence
 

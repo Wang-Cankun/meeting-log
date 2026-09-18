@@ -1,5 +1,58 @@
 import Foundation
 
+/// Both prompts and reference checks must use the same unedited source.
+struct SummaryEvidence: Equatable {
+    enum Source: String {
+        case raw = "transcript_raw.md"
+        case legacy = "transcript.md"
+
+        var metadata: String {
+            switch self {
+            case .raw: "- Evidence: transcript_raw.md (original transcription; L numbers refer to this file)"
+            case .legacy: "- Evidence: transcript.md (legacy fallback; original transcription unavailable; L numbers refer to this file)"
+            }
+        }
+    }
+
+    let text: String
+    let source: Source
+
+    init(text: String, source: Source) throws {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw EmptySource(fileName: source.rawValue)
+        }
+        self.text = text
+        self.source = source
+    }
+
+    /// Preserve absence too: adding a raw transcript changes the generation input.
+    struct Snapshot: Equatable {
+        let raw: String?
+        let readable: String?
+
+        static func load(in directory: URL) throws -> Self {
+            func readIfPresent(_ name: String) throws -> String? {
+                let url = directory.appending(path: name)
+                guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+                return try String(contentsOf: url, encoding: .utf8)
+            }
+            return try Self(raw: readIfPresent(Source.raw.rawValue), readable: readIfPresent(Source.legacy.rawValue))
+        }
+
+        func evidence() throws -> SummaryEvidence {
+            if let raw { return try SummaryEvidence(text: raw, source: .raw) }
+            return try SummaryEvidence(text: readable ?? "", source: .legacy)
+        }
+    }
+
+    struct EmptySource: LocalizedError {
+        let fileName: String
+        var errorDescription: String? {
+            "The evidence transcript \(fileName) is empty. Restore its contents before generating a summary."
+        }
+    }
+}
+
 enum TranscriptEvidence {
     static func annotated(_ transcript: String) -> String {
         var chunk = 0

@@ -17,6 +17,8 @@ final class CaptureService: NSObject, SCContentSharingPickerObserver, SCStreamDe
     private var recordingError: Error?
     private var isPreviewing = false
     private let systemAudio = SystemAudioCapture()
+    private var systemAudioGeneration: UUID?
+    private var systemAudioFailed = false
 
     var onScreenSelection: ((String) -> Void)?
     var onError: ((String) -> Void)?
@@ -24,8 +26,11 @@ final class CaptureService: NSObject, SCContentSharingPickerObserver, SCStreamDe
 
     override init() {
         super.init()
-        systemAudio.onLevel = { [weak self] value in
-            Task { @MainActor in self?.onSystemAudioLevel?(value) }
+        systemAudio.onLevel = { [weak self] generation, value in
+            Task { @MainActor in self?.receiveSystemAudioLevel(value, generation: generation) }
+        }
+        systemAudio.onWriteFailure = { [weak self] generation, message in
+            Task { @MainActor in self?.receiveSystemAudioFailure(message, generation: generation) }
         }
         let picker = SCContentSharingPicker.shared
         var configuration = picker.defaultConfiguration
@@ -45,12 +50,13 @@ final class CaptureService: NSObject, SCContentSharingPickerObserver, SCStreamDe
 
     func startPreview(applicationBundleID: String?) async throws {
         guard !isPreviewing else { return }
-        try systemAudio.start(applicationBundleID: applicationBundleID, outputURL: nil)
+        try startSystemAudio(applicationBundleID: applicationBundleID, outputURL: nil)
         isPreviewing = true
     }
 
     func stopPreview() {
         guard isPreviewing else { return }
+        invalidateSystemAudioCallbacks()
         try? systemAudio.stop()
         isPreviewing = false
     }
@@ -64,7 +70,7 @@ final class CaptureService: NSObject, SCContentSharingPickerObserver, SCStreamDe
         if screenOutputURL != nil, screenFilter == nil { throw CaptureError.noScreenSource }
 
         do {
-            try systemAudio.start(applicationBundleID: applicationBundleID, outputURL: systemAudioOutputURL)
+            try startSystemAudio(applicationBundleID: applicationBundleID, outputURL: systemAudioOutputURL)
             if let screenOutputURL, let screenFilter {
                 let configuration = SCStreamConfiguration()
                 configuration.capturesAudio = false
@@ -88,6 +94,7 @@ final class CaptureService: NSObject, SCContentSharingPickerObserver, SCStreamDe
                 try await stream.startCapture()
             }
         } catch {
+            invalidateSystemAudioCallbacks()
             try? systemAudio.stop()
             try? await videoStream?.stopCapture()
             resetRecording()
@@ -96,6 +103,7 @@ final class CaptureService: NSObject, SCContentSharingPickerObserver, SCStreamDe
     }
 
     func stop() async throws {
+        invalidateSystemAudioCallbacks()
         var stopError: (any Error)?
         do { try systemAudio.stop() }
         catch { stopError = error }
@@ -122,6 +130,40 @@ final class CaptureService: NSObject, SCContentSharingPickerObserver, SCStreamDe
         }
         resetRecording()
         if let stopError { throw stopError }
+    }
+
+    private func startSystemAudio(applicationBundleID: String?, outputURL: URL?) throws {
+        let generation = beginSystemAudioCallbacks()
+        do {
+            try systemAudio.start(applicationBundleID: applicationBundleID, outputURL: outputURL, generation: generation)
+        } catch {
+            invalidateSystemAudioCallbacks()
+            throw error
+        }
+    }
+
+    private func beginSystemAudioCallbacks() -> UUID {
+        let generation = UUID()
+        systemAudioGeneration = generation
+        systemAudioFailed = false
+        return generation
+    }
+
+    private func invalidateSystemAudioCallbacks() {
+        systemAudioGeneration = nil
+        onSystemAudioLevel?(0)
+    }
+
+    private func receiveSystemAudioLevel(_ value: Float, generation: UUID) {
+        guard systemAudioGeneration == generation, !systemAudioFailed else { return }
+        onSystemAudioLevel?(value)
+    }
+
+    private func receiveSystemAudioFailure(_ message: String, generation: UUID) {
+        guard systemAudioGeneration == generation, !systemAudioFailed else { return }
+        systemAudioFailed = true
+        onSystemAudioLevel?(0)
+        onError?(message)
     }
 
     nonisolated func contentSharingPicker(

@@ -50,9 +50,17 @@ Project folders are the source of truth and may use Unicode names. Users create 
 
 System audio uses a private Core Audio process tap and aggregate device. All Mac audio is the default; one running application can be selected by bundle identifier. The tap handles preview and writes `system-audio.caf` during recording without using the screen picker.
 
+Application discovery never changes the selected scope when an application disappears. The unavailable application remains selected; both the panel and the recording entry point reject starting it until it returns or the user explicitly selects another source. The recording destination cannot change while starting, recording, or stopping.
+
+System-audio writing and its error state belong to the IO queue. The first write failure immediately reports an error and stops positive meter updates. CaptureService forwards it to the existing stop path on the main actor, using a capture generation to reject stale errors and meter callbacks. Stop still throws the retained error after draining the queue.
+
 Microphone capture is optional and writes `microphone.m4a`. Its `AVCaptureSession` configuration, start, and stop operations run on one serial background queue so device transitions never block the main actor. After capture stops, both audio sources are mixed into `capture.mov`; the original tracks remain until compressed audio and Markdown outputs complete. Recovery also accepts older sessions that only contain `capture.mov`.
 
 Recording start and stop are single-flight operations. Capture callback failures use the same stop path so every active source is closed. Pending-session recovery does not run during recording, and `capture.mov` becomes visible only after a complete export is atomically moved into place. Completed outputs move into the selected project before recoverable pending media is cleaned up. A successfully stopped recording shorter than 10 seconds is discarded before mixing; capture failures still preserve the session in `.pending`.
+
+`CapturePreparation` owns raw-track mixing and its persistent `capture-preparation.json` receipt. It writes the complete or system-only plan before exporting and marks it ready only after atomic movie publication. A preparing receipt rebuilds media and invalidates derived audio/transcription caches; a ready receipt reuses the completed movie. Legacy pending sessions with raw tracks rebuild once to establish their inclusion; combined-only legacy sessions remain accepted. A corrupt receipt fails visibly instead of being treated as absent.
+
+If full mixing fails but system-only mixing succeeds, both raw tracks and the receipt survive archiving. Fixed notices are appended to both summaries after translation, and the recent-meeting panel and summary browser display the omission. Regeneration preserves the notice and checks the receipt for concurrent changes. Failed or otherwise idle pending sessions expose Retry and Show files even when saving a failed manifest was impossible. Recovery skips current and queued jobs.
 
 ScreenCaptureKit handles optional video only. The Apple content picker selects a display, window, or application after Record Screen is enabled. Video remains 1080p HEVC at 10 FPS and writes directly to `screen.mov`.
 
@@ -72,6 +80,8 @@ Upload chunks are mono AAC at 24 kHz and 48 kbps; the archive playback copy reta
 
 Completed block output is retained as `transcript_raw.md`. One text-only request edits the complete merged transcript into `transcript.md`, removing empty fillers and clear overlap duplicates while preserving recording/excerpt boundaries, timestamps, uncertainty and conversation. Structural rejection falls back to the raw transcript with a note; transport failure leaves the job recoverable. The source remains available for checking any editorial error.
 
+`SummaryEvidence` supplies the original transcription to both summary requests and reference checks. Cleanup output is never the authority for a new summary. Original and Chinese summaries label the evidence filename, and provenance stores it. Regeneration snapshots both transcript files, including absence; only missing raw transcription permits an explicitly labeled legacy fallback. Existing but empty or unreadable raw transcription blocks generation. Adding, editing, or deleting either source after generation blocks saving.
+
 The reviewed summary is saved as `summary.md`; another text-only request produces Mainland Simplified Chinese `summary_cn.md` and a short Chinese folder title. Names, technical terms, exact evidence quotes and metadata remain traceable. Folder names use `MMddyyyy-<short-title>`, bounded to 32 title characters and 96 UTF-8 bytes. Old names remain discoverable. Global and project meeting instructions live in `meeting_context.md`; general `context.md` files are not ingested.
 
 Summary regeneration previews both languages, checks both files for concurrent edits, and backs up both before replacement. Regeneration preserves transcript and folder identity.
@@ -85,5 +95,7 @@ The shared chooser groups destinations by their nearest project ancestor; group 
 ## Reassigning completed meetings
 
 Recent meeting actions include Move to project. The move window reuses the searchable nested project chooser and moves the complete archive folder without retaining duplicate media. It updates only the project metadata in the current original-language and Chinese summaries; generation provenance and prior revisions keep their historical context. Summary regeneration remains an explicit action after moving. Existing destination names receive numeric suffixes.
+
+The selected meeting's Files menu in All meetings exposes the same move window and protections, so older meetings remain manageable without appearing in the recent three.
 
 AppModel blocks moving during capture/import/processing and while the selected meeting has an active summary generation or unsaved preview. Move events refresh the summary browser and follow the selected meeting to its new location. Storage validates both projects and summary metadata before moving; write failures restore changed metadata and move the folder back. If rollback itself fails, the error reports the retained folder location for recovery.

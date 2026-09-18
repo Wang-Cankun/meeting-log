@@ -89,6 +89,7 @@ struct ArchivedMeeting: Identifiable, Equatable {
     let date: Date
     let createdAt: Date
     let url: URL
+    var captureWarning: String? = nil
 }
 
 enum AppPhase: Equatable {

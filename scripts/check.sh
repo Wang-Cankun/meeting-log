@@ -10,6 +10,7 @@ swiftc \
   "$repo_dir/Sources/MeetingLog/Storage/ArchiveStore.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/MarkdownRenderer.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/MediaProcessor.swift" \
+  "$repo_dir/Sources/MeetingLog/Processing/CapturePreparation.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/AudioImport.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/ProviderClient.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/MeetingProcessor.swift" \
@@ -20,6 +21,7 @@ swiftc \
   "$repo_dir/Sources/MeetingLog/Processing/SummaryRegenerator.swift" \
   "$repo_dir/Checks/SummaryChecks.swift" \
   "$repo_dir/Checks/ConcurrencyChecks.swift" \
+  "$repo_dir/Checks/CaptureRecoveryChecks.swift" \
   "$repo_dir/Checks/main.swift" \
   -module-cache-path "$repo_dir/.build/check-module-cache" \
   -o "$check_dir/check"
@@ -27,15 +29,24 @@ swiftc \
 
 # Compile the queue regression in the same file as AppModel for private-state access.
 cat "$repo_dir/Sources/MeetingLog/AppModel.swift" "$repo_dir/Checks/AppModelChecks.swift" > "$check_dir/AppModel.swift"
+cat "$repo_dir/Sources/MeetingLog/Capture/SystemAudioCapture.swift" \
+    "$repo_dir/Sources/MeetingLog/Capture/CaptureService.swift" "$repo_dir/Checks/CaptureChecks.swift" > "$check_dir/Capture.swift"
 cat > "$check_dir/RetryMain.swift" <<'SWIFT'
 import Foundation
 @main struct RetryChecks {
-    @MainActor static func main() throws { try AppModel.checkRetryWhileBusy() }
+    @MainActor static func main() async throws {
+        try AppModel.checkRetryWhileBusy()
+        try await AppModel.checkCaptureRecoveryPresentation()
+        try SystemAudioCapture.checkWriteFailure()
+        await CaptureService.checkWriteFailureDelivery()
+    }
 }
 SWIFT
 sources=("$repo_dir"/Sources/MeetingLog/**/*.swift)
 sources=("${(@)sources:#*/MeetingLogApp.swift}")
 sources=("${(@)sources:#*/AppModel.swift}")
-swiftc -parse-as-library -swift-version 6 "${sources[@]}" "$check_dir/AppModel.swift" "$check_dir/RetryMain.swift" \
+sources=("${(@)sources:#*/SystemAudioCapture.swift}")
+sources=("${(@)sources:#*/CaptureService.swift}")
+swiftc -parse-as-library -swift-version 6 "${sources[@]}" "$check_dir/AppModel.swift" "$check_dir/Capture.swift" "$check_dir/RetryMain.swift" \
     -module-cache-path "$repo_dir/.build/check-module-cache" -o "$check_dir/retry-check"
 "$check_dir/retry-check"

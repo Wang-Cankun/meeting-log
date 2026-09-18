@@ -5,15 +5,39 @@ import CoreAudio
 import Foundation
 
 final class SystemAudioCapture: @unchecked Sendable {
+    // This state belongs to the IO queue. The callback retains it, not the capture
+    // owner, so the owner's teardown cannot be triggered on the IO callback queue.
+    private final class OutputState: @unchecked Sendable {
+        var audioFile: AVAudioFile?
+        var levelGate = LevelUpdateGate()
+        var writeError: (any Error)?
+        var activeGeneration: UUID?
+        var onLevel: (@Sendable (UUID, Float) -> Void)?
+        var onWriteFailure: (@Sendable (UUID, String) -> Void)?
+
+        func process(_ buffer: AVAudioPCMBuffer, generation: UUID, write: () throws -> Void) {
+            guard activeGeneration == generation, writeError == nil else { return }
+            do { try write() }
+            catch {
+                writeError = error
+                onLevel?(generation, 0)
+                onWriteFailure?(generation, error.localizedDescription)
+                return
+            }
+            if levelGate.shouldPublish(at: DispatchTime.now().uptimeNanoseconds) {
+                onLevel?(generation, SystemAudioCapture.level(from: buffer))
+            }
+        }
+    }
+
     private let queue = DispatchQueue(label: "meeting-log.system-audio", qos: .userInitiated)
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
-    private var audioFile: AVAudioFile?
-    private var levelGate = LevelUpdateGate()
-    private var writeError: (any Error)?
+    private let output = OutputState()
 
-    var onLevel: (@Sendable (Float) -> Void)?
+    var onLevel: (@Sendable (UUID, Float) -> Void)?
+    var onWriteFailure: (@Sendable (UUID, String) -> Void)?
 
     static func applications() -> [CaptureApplication] {
         let ownBundleID = Bundle.main.bundleIdentifier
@@ -30,9 +54,9 @@ final class SystemAudioCapture: @unchecked Sendable {
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    func start(applicationBundleID: String?, outputURL: URL?) throws {
+    func start(applicationBundleID: String?, outputURL: URL?, generation: UUID) throws {
         guard tapID == kAudioObjectUnknown else { throw SystemAudioError.alreadyCapturing }
-        writeError = nil
+        prepareOutput(generation: generation)
 
         let description: CATapDescription
         if let applicationBundleID {
@@ -85,29 +109,27 @@ final class SystemAudioCapture: @unchecked Sendable {
                 if FileManager.default.fileExists(atPath: outputURL.path) {
                     try FileManager.default.removeItem(at: outputURL)
                 }
-                audioFile = try AVAudioFile(
-                    forWriting: outputURL,
-                    settings: format.settings,
-                    commonFormat: .pcmFormatFloat32,
-                    interleaved: format.isInterleaved
-                )
+                try queue.sync {
+                    output.audioFile = try AVAudioFile(
+                        forWriting: outputURL,
+                        settings: format.settings,
+                        commonFormat: .pcmFormatFloat32,
+                        interleaved: format.isInterleaved
+                    )
+                }
             }
 
+            let output = output
             try check(
-                AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateDeviceID, queue) { [weak self] _, inputData, _, _, _ in
-                    guard let self,
-                          let buffer = AVAudioPCMBuffer(
+                AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateDeviceID, queue) { _, inputData, _, _, _ in
+                    guard let buffer = AVAudioPCMBuffer(
                               pcmFormat: format,
                               bufferListNoCopy: inputData,
                               deallocator: nil
                           )
                     else { return }
-                    if self.writeError == nil {
-                        do { try self.audioFile?.write(from: buffer) }
-                        catch { self.writeError = error }
-                    }
-                    if self.levelGate.shouldPublish(at: DispatchTime.now().uptimeNanoseconds) {
-                        self.onLevel?(Self.level(from: buffer))
+                    output.process(buffer, generation: generation) {
+                        try output.audioFile?.write(from: buffer)
                     }
                 },
                 operation: "prepare system audio"
@@ -119,6 +141,19 @@ final class SystemAudioCapture: @unchecked Sendable {
         }
     }
 
+    private func prepareOutput(generation: UUID) {
+        let onLevel = onLevel
+        let onWriteFailure = onWriteFailure
+        queue.sync {
+            output.audioFile = nil
+            output.activeGeneration = generation
+            output.writeError = nil
+            output.levelGate.reset()
+            output.onLevel = onLevel
+            output.onWriteFailure = onWriteFailure
+        }
+    }
+
     func stop() throws {
         if aggregateDeviceID != kAudioObjectUnknown {
             _ = AudioDeviceStop(aggregateDeviceID, ioProcID)
@@ -127,7 +162,17 @@ final class SystemAudioCapture: @unchecked Sendable {
             }
         }
         ioProcID = nil
-        audioFile = nil
+        // Drain queued callbacks before closing the file or reading the retained error.
+        let writeError: (any Error)? = queue.sync {
+            output.audioFile = nil
+            let error = output.writeError
+            output.writeError = nil
+            let generation = output.activeGeneration
+            output.activeGeneration = nil
+            output.levelGate.reset()
+            if let generation { output.onLevel?(generation, 0) }
+            return error
+        }
         if aggregateDeviceID != kAudioObjectUnknown {
             _ = AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
             aggregateDeviceID = kAudioObjectUnknown
@@ -136,12 +181,7 @@ final class SystemAudioCapture: @unchecked Sendable {
             _ = AudioHardwareDestroyProcessTap(tapID)
             tapID = kAudioObjectUnknown
         }
-        levelGate.reset()
-        onLevel?(0)
-        if let writeError {
-            self.writeError = nil
-            throw writeError
-        }
+        if let writeError { throw writeError }
     }
 
     deinit { try? stop() }

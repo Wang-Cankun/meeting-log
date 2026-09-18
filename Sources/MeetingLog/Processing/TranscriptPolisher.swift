@@ -49,7 +49,7 @@ enum TranscriptPolisher {
         """
         CHINESE_SUMMARY
         Translate this complete reviewed meeting summary into natural Mainland Simplified Chinese. Return only JSON: {"folderTitle":"8–20 character concise Simplified Chinese topic title","markdown":"complete translated Markdown"}.
-        Preserve the full structure, every action, owner, deadline, decision, uncertainty, number, link and source reference. Keep names, product names, gene symbols, paths and established technical terms in English where appropriate. Translate headings and explanatory prose; use Mainland terminology. Keep exact quoted transcript evidence unchanged so references remain traceable. Do not add interpretations or commitments. Keep the '- Date:' and '- Project:' metadata lines unchanged. The folder title must cover the main topic, not the full agenda, and must be at most 32 characters. The summary itself may have a fuller Chinese title.
+        Preserve the full structure, every action, owner, deadline, decision, uncertainty, number, link and source reference. Keep names, product names, gene symbols, paths and established technical terms in English where appropriate. Translate headings and explanatory prose; use Mainland terminology. Keep exact quoted transcript evidence unchanged so references remain traceable. Do not add interpretations or commitments. Keep the '- Date:', '- Project:', and '- Evidence:' metadata lines unchanged. The folder title must cover the main topic, not the full agenda, and must be at most 32 characters. The summary itself may have a fuller Chinese title.
         Context for spelling only: \(context)
         <summary>
         \(summary)
@@ -61,9 +61,10 @@ enum TranscriptPolisher {
         let result = try decode(ChineseSummary.self, await client.complete(prompt: chinesePrompt(summary: summary, context: context)))
         guard result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("# "),
               !result.folderTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProcessingError.invalidJSON }
-        let metadata = summary.components(separatedBy: .newlines).filter { $0.hasPrefix("- Date: ") || $0.hasPrefix("- Project: ") }
+        let metadataPrefixes = ["- Date: ", "- Project: ", "- Evidence: "]
+        let metadata = summary.components(separatedBy: .newlines).filter { line in metadataPrefixes.contains { line.hasPrefix($0) } }
         var lines = result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines)
-            .filter { !$0.hasPrefix("- Date: ") && !$0.hasPrefix("- Project: ") }
+            .filter { line in !metadataPrefixes.contains { line.hasPrefix($0) } }
         lines.insert(contentsOf: [""] + metadata, at: 1)
         return ChineseSummary(folderTitle: result.folderTitle, markdown: lines.joined(separator: "\n") + "\n")
     }

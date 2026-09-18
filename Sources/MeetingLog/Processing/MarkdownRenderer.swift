@@ -31,12 +31,13 @@ enum MarkdownRenderer {
         return output
     }
 
-    static func summary(_ value: MeetingAnalysis, startedAt: Date) -> String {
+    static func summary(_ value: MeetingAnalysis, startedAt: Date, evidenceSource: SummaryEvidence.Source = .legacy) -> String {
         var output = """
         # \(value.title)
 
         - Date: \(day.string(from: startedAt))
         - Project: \(value.projectName)
+        \(evidenceSource.metadata)
 
         ## Summary
 

@@ -154,6 +154,10 @@ struct ControlPanel: View {
                     Text("All apps")
                 }
             }
+            if !model.selectedSystemAudioIsAvailable {
+                Divider()
+                Label("\(model.selectedSystemAudioName) (unavailable)", systemImage: "checkmark")
+            }
             if !model.applications.isEmpty {
                 Divider()
                 ForEach(model.applications) { application in
@@ -295,6 +299,8 @@ struct ControlPanel: View {
             set: { model.selectProject($0) }
         ), refresh: model.refreshArchive)
         .frame(maxWidth: 210)
+        .disabled(!model.canSelectRecordingProject)
+        .help(model.canSelectRecordingProject ? "Choose where to save the next recording" : "This recording's destination is fixed until recording stops")
     }
 
     private var showsProcessingStatus: Bool {
@@ -317,11 +323,16 @@ struct ControlPanel: View {
                 }
             }
             Spacer(minLength: 8)
-            if model.processingFailureCount > 0 {
-                Button("Retry") { model.retryFailedProcessing() }
-                    .controlSize(.small)
-                    .disabled(!model.canRetryProcessing)
-                    .help("Retry is available when recording, import, and processing finish.")
+            if model.showsRecoveryActions {
+                VStack(spacing: 4) {
+                    Button("Retry") { model.retryFailedProcessing() }
+                        .disabled(!model.canRetryProcessing)
+                        .help("Retry is available when recording, import, and processing finish.")
+                    Button("Show files") { model.showPendingMeetingsInFinder() }
+                    if !model.keySaved {
+                        Button("Settings") { showSettings() }
+                    }
+                }.controlSize(.small)
             } else if !model.keySaved && model.waitingForProcessingCount > 0 {
                 Button("Settings") { showSettings() }.controlSize(.small)
             }
@@ -337,6 +348,9 @@ struct ControlPanel: View {
     }
 
     private var processingDetail: String? {
+        if let error = model.pendingFailureText {
+            return "Saved locally for recovery. \(error)"
+        }
         if let text = model.processingText { return text }
         guard model.waitingForProcessingCount > 0 else { return nil }
         let noun = model.waitingForProcessingCount == 1 ? "recording" : "recordings"
@@ -403,6 +417,10 @@ struct ControlPanel: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
+                                if let warning = meeting.captureWarning {
+                                    Label("Partial audio recovery", systemImage: "exclamationmark.triangle")
+                                        .font(.caption).foregroundStyle(.orange).help(warning)
+                                }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }

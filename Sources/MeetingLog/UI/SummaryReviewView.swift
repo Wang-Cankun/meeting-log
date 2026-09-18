@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SummaryReviewView: View {
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var model: AppModel
     @State private var meetings: [ArchivedMeeting] = []
     @State private var selection: URL?
@@ -122,6 +123,11 @@ struct SummaryReviewView: View {
                         Label("Project context is empty. Add confirmed participants, terms, and handoff locations to improve this summary.", systemImage: "info.circle")
                             .font(.callout).foregroundStyle(.secondary)
                     }
+                    if let warning = meeting.captureWarning {
+                        Label(warning, systemImage: "exclamationmark.triangle")
+                            .font(.callout).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     HStack(spacing: 12) {
                         Picker("Summary language", selection: $chinesePreview) {
                             Text("Original").tag(false)
@@ -130,6 +136,9 @@ struct SummaryReviewView: View {
                         Spacer(minLength: 8)
                         Menu {
                         Button("Open transcript") { NSWorkspace.shared.open(meeting.url.appending(path: "transcript.md")) }
+                        Button("Open source transcript") {
+                            NSWorkspace.shared.open(meeting.url.appending(path: evidenceFileName(for: meeting)))
+                        }
                         Button("Open meeting context") {
                             let file = meeting.url.deletingLastPathComponent().deletingLastPathComponent().appending(path: "meeting_context.md")
                             do {
@@ -140,6 +149,13 @@ struct SummaryReviewView: View {
                             } catch { self.error = error.localizedDescription }
                         }
                         Button("Show in Finder") { model.showInFinder(meeting.url) }
+                        Divider()
+                        Button("Move to project…", systemImage: "folder.badge.arrowshape.forward") {
+                            model.meetingToMove = meeting
+                            openWindow(id: "move-meeting")
+                            NSApplication.shared.activate(ignoringOtherApps: true)
+                        }
+                        .disabled(busy || revision != nil || !model.canMoveMeeting(meeting))
                         } label: { Label("Files", systemImage: "folder") }
                     }.controlSize(.regular)
                     if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
@@ -149,7 +165,7 @@ struct SummaryReviewView: View {
                         if let revision { preview("New summary", text: chinesePreview ? revision.chineseMarkdown : revision.markdown, showTitle: chinesePreview || changedTitle) }
                     }
                     Divider()
-                    Text("Uses saved transcript and meeting context · \(URL(string: model.providerBaseURL)?.host ?? "configured provider")")
+                    Text("Evidence: \(evidenceFileName(for: meeting))\(evidenceFileName(for: meeting) == "transcript.md" ? " (legacy fallback)" : "") · meeting context · \(URL(string: model.providerBaseURL)?.host ?? "configured provider")")
                         .font(.caption).foregroundStyle(.secondary)
                         .help("Model: \(model.selectedModelID). Audio is not uploaded. Both summary languages are generated.")
                     HStack {
@@ -233,7 +249,11 @@ struct SummaryReviewView: View {
     }
 
     private func errorFreeTranscript(_ meeting: ArchivedMeeting) -> Bool {
-        FileManager.default.fileExists(atPath: meeting.url.appending(path: "transcript.md").path)
+        FileManager.default.fileExists(atPath: meeting.url.appending(path: evidenceFileName(for: meeting)).path)
+    }
+    private func evidenceFileName(for meeting: ArchivedMeeting) -> String {
+        FileManager.default.fileExists(atPath: meeting.url.appending(path: SummaryEvidence.Source.raw.rawValue).path)
+            ? SummaryEvidence.Source.raw.rawValue : SummaryEvidence.Source.legacy.rawValue
     }
     private func applyOpenRequest() {
         guard !busy, revision == nil,

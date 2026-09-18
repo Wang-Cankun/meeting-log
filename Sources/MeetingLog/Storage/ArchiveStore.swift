@@ -238,7 +238,8 @@ struct ArchiveStore {
             throw failure
         }
         return ArchivedMeeting(title: meeting.title, projectName: destinationProject.name, dateText: meeting.dateText,
-                               date: meeting.date, createdAt: meeting.createdAt, url: destination)
+                               date: meeting.date, createdAt: meeting.createdAt, url: destination,
+                               captureWarning: meeting.captureWarning)
     }
 
     func recentMeetings(limit: Int = 3) throws -> [ArchivedMeeting] {
@@ -269,7 +270,8 @@ struct ArchiveStore {
                     dateText: dateText,
                     date: date,
                     createdAt: createdAt,
-                    url: meeting
+                    url: meeting,
+                    captureWarning: (try? CapturePreparation.load(in: meeting))?.warning
                 )
             }
         }

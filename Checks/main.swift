@@ -312,6 +312,7 @@ precondition(!FileManager.default.fileExists(atPath: discardedSession.0.path))
 try FileManager.default.removeItem(at: compatibilityRoot)
 try await checkConcurrentTranscription()
 try await checkSummaryRegeneration()
+try await checkCapturePreparation()
 print("MeetingLog check passed")
 
 // Optional real audio fixtures remain local; no provider requests are made.

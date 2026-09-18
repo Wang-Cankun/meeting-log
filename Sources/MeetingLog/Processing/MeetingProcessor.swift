@@ -13,6 +13,10 @@ struct MeetingProcessor {
         try store.write(manifest, to: directory)
 
         do {
+            let capturePreparation = try CapturePreparation.load(in: directory)
+            if let capturePreparation, capturePreparation.state != .ready {
+                throw ProcessingError.captureNotReady
+            }
             progress("Preparing audio")
             let prepared: (audio: URL, chunks: [AudioChunk])
             switch MediaProcessor.pendingInput(in: directory) {
@@ -58,6 +62,7 @@ struct MeetingProcessor {
             }
 
             let rawTranscript = MarkdownRenderer.transcript(blocks: blocks, parts: manifest.importedParts ?? [])
+            let evidence = try SummaryEvidence(text: rawTranscript, source: .raw)
             try rawTranscript.write(to: directory.appending(path: "transcript_raw.md"), atomically: true, encoding: .utf8)
             progress("Cleaning transcript across excerpts")
             let transcript = try await TranscriptPolisher.clean(raw: rawTranscript, context: transcriptionContext, client: client)
@@ -65,7 +70,7 @@ struct MeetingProcessor {
 
             progress("Writing summary")
             let analysisPrompt = Prompts.analysis(
-                    transcript: transcript,
+                    evidence: evidence,
                     globalContext: context,
                     projectName: resolvedProjectName,
                     projectContext: projectContext
@@ -74,22 +79,24 @@ struct MeetingProcessor {
             // Validate the draft schema before spending a second request on evidence review.
             _ = try decode(MeetingAnalysis.self, from: analysisText)
             progress("Checking summary evidence")
-            let reviewPrompt = Prompts.review(analysis: analysisText, transcript: transcript, context: transcriptionContext)
+            let reviewPrompt = Prompts.review(analysis: analysisText, evidence: evidence, context: transcriptionContext)
             let reviewedText = try await client.complete(prompt: reviewPrompt)
             var analysis = try decode(MeetingAnalysis.self, from: reviewedText)
-            analysis = TranscriptEvidence.annotateReferences(analysis, transcript: transcript)
+            analysis = TranscriptEvidence.annotateReferences(analysis, transcript: evidence.text)
             analysis.title = ArchiveStore.meetingTitle(analysis.title)
             analysis.projectName = resolvedProjectName
 
             try transcript.write(to: directory.appending(path: "transcript.md"), atomically: true, encoding: .utf8)
-            try MarkdownRenderer.summary(analysis, startedAt: manifest.startedAt)
-                .write(to: directory.appending(path: "summary.md"), atomically: true, encoding: .utf8)
             progress("Writing Simplified Chinese summary")
-            let summary = MarkdownRenderer.summary(analysis, startedAt: manifest.startedAt)
+            let summary = MarkdownRenderer.summary(analysis, startedAt: manifest.startedAt, evidenceSource: evidence.source)
             let chinese = try await TranscriptPolisher.chinese(summary: summary, context: transcriptionContext, client: client)
-            try chinese.markdown.write(to: directory.appending(path: "summary_cn.md"), atomically: true, encoding: .utf8)
+            try (capturePreparation?.addingNotice(to: summary) ?? summary)
+                .write(to: directory.appending(path: "summary.md"), atomically: true, encoding: .utf8)
+            try (capturePreparation?.addingNotice(to: chinese.markdown, chinese: true) ?? chinese.markdown)
+                .write(to: directory.appending(path: "summary_cn.md"), atomically: true, encoding: .utf8)
 
             let provenance = ["model": client.model, "endpoint": client.baseURL,
+                              "evidenceSource": evidence.source.rawValue,
                               "analysisPrompt": analysisPrompt, "reviewPrompt": reviewPrompt,
                               "cleanupPrompt": TranscriptPolisher.prompt(raw: rawTranscript, context: transcriptionContext),
                               "chinesePrompt": TranscriptPolisher.chinesePrompt(summary: summary, context: transcriptionContext)]
@@ -118,8 +125,10 @@ struct MeetingProcessor {
             try? FileManager.default.removeItem(at: destination.appending(path: "parts"))
             try? FileManager.default.removeItem(at: destination.appending(path: "coverage.json"))
             try? FileManager.default.removeItem(at: destination.appending(path: "session.json"))
-            try? FileManager.default.removeItem(at: destination.appending(path: "system-audio.caf"))
-            try? FileManager.default.removeItem(at: destination.appending(path: "microphone.m4a"))
+            if capturePreparation?.retainsRawTracks != true {
+                try? FileManager.default.removeItem(at: destination.appending(path: "system-audio.caf"))
+                try? FileManager.default.removeItem(at: destination.appending(path: "microphone.m4a"))
+            }
             progress("Complete")
             return destination
         } catch {
@@ -155,11 +164,13 @@ struct MeetingProcessor {
 enum ProcessingError: LocalizedError {
     case incompleteCoverage
     case invalidJSON
+    case captureNotReady
 
     var errorDescription: String? {
         switch self {
         case .incompleteCoverage: "Not every audio block was transcribed."
         case .invalidJSON: "The summary model did not return JSON."
+        case .captureNotReady: "Audio recovery is incomplete. Retry this recording before processing it."
         }
     }
 }

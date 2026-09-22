@@ -19,9 +19,11 @@ swiftc \
   "$repo_dir/Sources/MeetingLog/Processing/Prompts.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/TranscriptionBatch.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/SummaryRegenerator.swift" \
+  "$repo_dir/Sources/MeetingLog/UI/SummaryMarkdown.swift" \
   "$repo_dir/Checks/SummaryChecks.swift" \
   "$repo_dir/Checks/ConcurrencyChecks.swift" \
   "$repo_dir/Checks/CaptureRecoveryChecks.swift" \
+  "$repo_dir/Checks/TrackChecks.swift" \
   "$repo_dir/Checks/main.swift" \
   -module-cache-path "$repo_dir/.build/check-module-cache" \
   -o "$check_dir/check"

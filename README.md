@@ -38,7 +38,9 @@ Transcription submits up to three audio blocks concurrently, saves completed res
 
 ### Regenerate a saved summary
 
-Choose **All meetings**, or **Regenerate summary…** in a recent meeting's menu. Select a meeting, update its project context if needed, and generate. The app uses the saved transcript, uploads no audio, and shows the current and proposed Markdown side by side. Choose **Save new summary** to replace it with a backup, or **Discard preview** to keep the original. Previous versions and generation provenance live in the meeting's hidden `.summary-history` folder.
+In **All meetings**, click **Transcript** or any `L` reference in a summary to open the transcript beside it at that line; click a timestamp to play the recording from there.
+
+To regenerate, choose **All meetings**, or **Regenerate summary…** in a recent meeting's menu. Select a meeting, update its project context if needed, and generate. The app uses the saved transcript, uploads no audio, and shows the current and proposed Markdown side by side. Choose **Save new summary** to replace it with a backup, or **Discard preview** to keep the original. Previous versions and generation provenance live in the meeting's hidden `.summary-history` folder.
 
 The **Files** menu in All meetings also offers **Move to project…**, including for older meetings. Moving remains disabled during processing or an unsaved summary preview.
 
@@ -47,6 +49,8 @@ The **Files** menu in All meetings also offers **Move to project…**, including
 Use `meeting_context.md` at the archive root and in each project for meeting-specific names, aliases, and preferences. General project `context.md` is separate.
 
 New meetings use short Chinese folder names such as `09112026-空间多组学与R21课题合作`. The full title remains in Markdown. Uploads use 10-minute mono AAC chunks at 48 kbps, not the raw recording.
+
+When a recording includes the microphone, MeetingLog transcribes it separately from computer audio, so your own turns are labeled `Me`. Other participants keep anonymous letters unless the conversation identifies them.
 
 Each new completed meeting includes `audio.m4a`, `transcript_raw.md`, the edited `transcript.md`, `summary.md`, and Mainland Simplified Chinese `summary_cn.md`. Cleanup removes empty fillers and obvious overlap duplicates while retaining conversation; the raw transcript remains the evidence backup. Summary regeneration previews and saves both languages. Existing transcripts are not automatically rewritten.
 

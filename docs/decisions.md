@@ -6,7 +6,7 @@
 |---|---|---|
 | Personal macOS 26 app | accepted | No accounts, installer, updater, or backward-compatibility paths |
 | Native SwiftUI | accepted | Core Audio, ScreenCaptureKit, AVFoundation, Security, and URLSession remain direct dependencies |
-| Configurable AI provider | accepted | One user-entered OpenAI-compatible endpoint, model, and API key serve transcription and summary; OpenRouter and Gemini 3.7 Flash remain the defaults |
+| Configurable AI provider | accepted | One user-entered OpenAI-compatible endpoint, model, and API key serve transcription and summary; defaults are OpenRouter and `google/gemini-3.8-flash` |
 | Ten-minute blocks with ten-second overlap | accepted | Every block must succeed before final Markdown is written |
 | Transcript is evidence | accepted | Unsupported decisions are empty; unsupported context and reasons are empty strings |
 | Folder-owned projects | accepted | Users create Unicode project folders and choose the destination per recording in the panel; selection uses its relative path; a missing destination requires an explicit replacement |
@@ -22,6 +22,9 @@
 | Core Audio owns system audio | accepted | System audio uses its dedicated privacy permission; ScreenCaptureKit is requested only for optional video |
 | Timer-led recording panel | accepted | The panel shows elapsed time while recording; the menu bar uses a static recording indicator because self-updating SwiftUI content in a `MenuBarExtra` label caused an unbounded redraw loop on macOS 26 |
 | Explicit partial recovery | accepted | A permanent preparing/ready receipt records complete versus system-only mixing before media publication; excluded original tracks and fixed bilingual warnings survive archiving and regeneration |
+| Microphone track identifies the recording user | accepted | Complete captures transcribe computer audio and microphone separately; microphone turns are always labeled `Me`, trading one extra audio upload per window for deterministic attribution |
+| Generic prompts | accepted | Prompts state classification rules without examples from specific meetings; meeting-specific cases belong in evaluation material, not in every request |
+| Inline panel feedback | accepted | The menu bar panel uses inline notices, Undo, and confirmations instead of modal alerts; completion uses notifications instead of opening Finder |
 | Original transcription owns summary evidence | accepted | Drafts, review and line references use raw transcription; only old archives without it fall back to the readable transcript, with the source stated explicitly |
 
 Prompt changes and evaluation criteria are documented in [prompt quality](prompt-quality.md); project authors can use the [context template](templates/project-context.md).

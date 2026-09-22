@@ -1,0 +1,130 @@
+import AVFoundation
+import Foundation
+
+/// A complete capture transcribes microphone and computer audio separately and labels the microphone Me.
+@MainActor
+func checkSeparateTrackTranscription() async throws {
+    let merged = MarkdownRenderer.merged([
+        TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete,
+                        text: "[00:02] Speaker A: Can you hear me?\n\n[00:09] Speaker B: Next item."),
+        TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete,
+                        text: "[00:05] Speaker A: Yes, clearly."),
+    ])
+    precondition(merged == "[00:02] Speaker A: Can you hear me?\n\n[00:05] Me: Yes, clearly.\n\n[00:09] Speaker B: Next item.")
+    let silent = MarkdownRenderer.merged([
+        TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete, text: "[00:00] Speaker: [no audible speech]"),
+        TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete, text: "[00:03] Me: Hello?"),
+    ])
+    precondition(silent == "[00:03] Me: Hello?", "Silence placeholders must not interleave with speech")
+
+    let root = FileManager.default.temporaryDirectory.appending(path: "track-check-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ArchiveStore(root: root)
+    let project = try store.createProject(named: "Tracks")
+    let (directory, manifest) = try store.createPendingSession(videoEnabled: false, microphoneID: "fixture")
+    try writeTone(to: directory.appending(path: "system-audio.caf"), seconds: 20, fileType: .caf)
+    try writeTone(to: directory.appending(path: "microphone.m4a"), seconds: 15, fileType: .m4a)
+    let preparation = try await CapturePreparation.prepare(in: directory)
+    precondition(preparation.mode == .complete)
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [TrackFixture.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let provider = ProviderClient(baseURL: "https://tracks.invalid", apiKey: "fixture", model: "fixture", session: session)
+    let archived = try await MeetingProcessor(store: store, client: provider)
+        .process(directory: directory, manifest: manifest, projectName: project.name)
+    let raw = try String(contentsOf: archived.appending(path: "transcript_raw.md"), encoding: .utf8)
+    precondition(raw.contains("Turns labeled Me come from the recording user's microphone."))
+    precondition(raw.contains("[00:01] Speaker A: Remote update.\n\n[00:04] Me: Local reply."), raw)
+    precondition(raw.components(separatedBy: "## ").count == 2, "Both tracks must share one section per window")
+    precondition(FileManager.default.fileExists(atPath: archived.appending(path: "audio.m4a").path))
+    precondition(!FileManager.default.fileExists(atPath: archived.appending(path: "microphone.m4a").path))
+    print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, silence handling")
+}
+
+private func writeTone(to url: URL, seconds: Int, fileType: AVFileType) throws {
+    let format = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)!
+    var settings = format.settings
+    if fileType == .m4a {
+        settings = [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 24_000, AVNumberOfChannelsKey: 1]
+    }
+    let file = try AVAudioFile(forWriting: url, settings: settings)
+    let frames = AVAudioFrameCount(24_000 * seconds)
+    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+    buffer.frameLength = frames
+    for index in 0..<Int(frames) {
+        buffer.floatChannelData![0][index] = 0.1 * sin(Float(index) * 2 * .pi * 440 / 24_000)
+    }
+    try file.write(from: buffer)
+}
+
+private final class TrackFixture: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        var data = request.httpBody ?? Data()
+        if data.isEmpty, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                data.append(contentsOf: buffer.prefix(count))
+            }
+        }
+        let body = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let parts = (body["messages"] as! [[String: Any]])[0]["content"] as! [[String: Any]]
+        let prompt = parts.first { $0["type"] as? String == "text" }!["text"] as! String
+        let content: String
+        if parts.contains(where: { $0["type"] as? String == "input_audio" }) {
+            if prompt.contains("Source: the recording user's own microphone") {
+                // The model's label is ignored; the track determines Me.
+                content = "[00:04] Speaker A: Local reply."
+            } else {
+                precondition(prompt.contains("Source: the computer's audio output"))
+                content = "[00:01] Speaker A: Remote update."
+            }
+        } else if prompt.contains("CLEAN_TRANSCRIPT") {
+            let raw = prompt.components(separatedBy: "<raw_transcript>\n")[1].components(separatedBy: "\n</raw_transcript>")[0]
+            content = String(data: try! JSONSerialization.data(withJSONObject: ["transcript": raw]), encoding: .utf8)!
+        } else if prompt.contains("CHINESE_SUMMARY") {
+            content = ##"{"folderTitle":"音轨测试","markdown":"# 音轨测试\n\n## 摘要\n\n测试。"}"##
+        } else {
+            content = #"{"title":"Track fixture","projectName":"Tracks","summary":["Fixture."],"actionItems":[],"decisions":[],"keyTopics":[]}"#
+        }
+        let response = try! JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": content]]]])
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: response)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+func checkSummaryMarkdown() {
+    let blocks = SummaryMarkdown.parse("""
+    # Title
+
+    ## Action items
+
+    | Task | Owner | Deadline | Context / evidence |
+    | --- | --- | --- | --- |
+    | Send A &#124; B | Me | — | L3: “Send it.”<br>L9 [unverified reference]: “Soon.” |
+
+    - Adopt plan
+      Evidence: L12: “We agree.”
+    1. First
+    """)
+    precondition(blocks == [
+        .heading(level: 1, text: "Title"),
+        .heading(level: 2, text: "Action items"),
+        .table(header: ["Task", "Owner", "Deadline", "Context / evidence"],
+               rows: [["Send A | B", "Me", "—", "L3: “Send it.”\nL9 [unverified reference]: “Soon.”"]]),
+        .bullet(marker: "•", text: "Adopt plan", depth: 0),
+        .detail(text: "Evidence: L12: “We agree.”", depth: 0),
+        .bullet(marker: "1.", text: "First", depth: 0),
+    ], "\(blocks)")
+    let links = SummaryMarkdown.inline("Evidence: L12: “HLA2 L3”, see URL1").runs.compactMap(\.link)
+    precondition(links.compactMap(SummaryMarkdown.line(from:)) == [12, 3], "\(links)")
+    print("Summary Markdown passed: tables, continuation lines, numbered lists and reference links")
+}

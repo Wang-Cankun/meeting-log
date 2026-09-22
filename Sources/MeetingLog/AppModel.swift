@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Combine
 import Foundation
+import UserNotifications
 
 @MainActor
 final class AudioLevels: ObservableObject {
@@ -29,7 +30,7 @@ final class AppModel: ObservableObject {
     @Published var keySaved = false
     @Published var providerStatus: String?
     @Published var isVerifyingProvider = false
-    @Published var selectedModelID = UserDefaults.standard.string(forKey: "providerModel") ?? "google/gemini-3.7-flash"
+    @Published var selectedModelID = UserDefaults.standard.string(forKey: "providerModel") ?? "google/gemini-3.8-flash"
     @Published var archiveRootPath = UserDefaults.standard.string(forKey: ArchiveStore.rootDefaultsKey) ?? AppModel.defaultArchiveURL.path
     @Published var applications: [CaptureApplication] = []
     @Published var selectedSystemAudioBundleID: String?
@@ -51,6 +52,9 @@ final class AppModel: ObservableObject {
     @Published var summaryOpenRequest: SummaryOpenRequest?
     @Published private(set) var recentMeetings: [ArchivedMeeting] = []
     @Published var selectedProjectName = UserDefaults.standard.string(forKey: AppModel.projectDefaultsKey)
+    /// Feedback shown inside the menu bar panel, where modal alerts would detach from the panel.
+    @Published private(set) var notice: PanelNotice?
+    @Published private(set) var missingProjectRetry: MissingProjectRetry?
 
     let capture = CaptureService()
     let microphone = MicrophoneCapture()
@@ -184,7 +188,7 @@ final class AppModel: ObservableObject {
 
     func removeProviderConfiguration() {
         providerBaseURL = "https://openrouter.ai/api/v1"
-        selectedModelID = "google/gemini-3.7-flash"
+        selectedModelID = "google/gemini-3.8-flash"
         apiKey = ""
         keySaved = false
         providerStatus = "Configuration removed"
@@ -281,13 +285,6 @@ final class AppModel: ObservableObject {
         guard canManageArchive, let store = try? recordingStore() else { return }
         let sessions = (try? store.pendingSessions()) ?? []
         guard !sessions.isEmpty else { return }
-        let noun = sessions.count == 1 ? "meeting" : "meetings"
-        let alert = NSAlert()
-        alert.messageText = "Discard pending meetings?"
-        alert.informativeText = "\(sessions.count) unfinished \(noun) will be moved to the Trash and will no longer be processed."
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             for (directory, _) in sessions {
                 try FileManager.default.trashItem(at: directory, resultingItemURL: nil)
@@ -296,6 +293,11 @@ final class AppModel: ObservableObject {
             showError("Pending meetings were not discarded: \(error.localizedDescription)")
         }
         refreshArchive()
+    }
+
+    var pendingMeetingCount: Int {
+        guard let store = try? recordingStore() else { return 0 }
+        return ((try? store.pendingSessions()) ?? []).count
     }
 
     func canMoveMeeting(_ meeting: ArchivedMeeting) -> Bool {
@@ -316,18 +318,34 @@ final class AppModel: ObservableObject {
 
     func deleteMeeting(_ meeting: ArchivedMeeting) {
         guard canManageArchive else { return }
-        let alert = NSAlert()
-        alert.messageText = "Move meeting to Trash?"
-        alert.informativeText = "\(meeting.title)\nProject: \(meeting.projectName)\n\(meeting.url.path)"
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            try FileManager.default.trashItem(at: meeting.url, resultingItemURL: nil)
+            var trashed: NSURL?
+            try FileManager.default.trashItem(at: meeting.url, resultingItemURL: &trashed)
             refreshArchive()
+            let original = meeting.url
+            notice = PanelNotice(message: "Moved “\(meeting.title)” to Trash.", undo: trashed.map { trashed in
+                { [weak self] in self?.restoreFromTrash(trashed as URL, to: original) }
+            })
         } catch {
             showError("The meeting was not deleted: \(error.localizedDescription)")
         }
+    }
+
+    private func restoreFromTrash(_ trashed: URL, to original: URL) {
+        notice = nil
+        do {
+            guard !FileManager.default.fileExists(atPath: original.path) else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            try FileManager.default.moveItem(at: trashed, to: original)
+            refreshArchive()
+        } catch {
+            showError("The meeting could not be restored. It remains in the Trash. \(error.localizedDescription)")
+        }
+    }
+
+    func dismissNotice() {
+        notice = nil
     }
 
     func toggleRecording() {
@@ -360,21 +378,34 @@ final class AppModel: ObservableObject {
             }
             if !missing.isEmpty {
                 let replacement = try store.resolveProject(selectedProjectName)
-                let alert = NSAlert()
-                alert.messageText = "Use a new location for pending meetings?"
-                alert.informativeText = "\(missing.count) pending meeting(s) refer to a missing project. Retry them in \(replacement.displayPath)? Their audio and completed transcripts will be preserved."
-                alert.addButton(withTitle: "Use this location")
-                alert.addButton(withTitle: "Cancel")
-                guard alert.runModal() == .alertFirstButtonReturn, canRetryProcessing else { return }
-                for (directory, original) in missing {
-                    var manifest = original
-                    manifest.projectName = replacement.name
-                    try store.write(manifest, to: directory)
-                }
+                missingProjectRetry = MissingProjectRetry(count: missing.count, projectName: replacement.name,
+                                                          displayPath: replacement.displayPath)
+                return
             }
         } catch { showError(error.localizedDescription); return }
+        missingProjectRetry = nil
         processingFailureCount = 0
         Task { await resumePendingSessions() }
+    }
+
+    /// Pending meetings whose project disappeared are only reassigned after explicit confirmation.
+    func confirmMissingProjectRetry() {
+        guard let request = missingProjectRetry, canRetryProcessing else { return }
+        missingProjectRetry = nil
+        do {
+            let store = try recordingStore()
+            for (directory, original) in try store.pendingSessions() {
+                guard let name = original.projectName, (try? store.resolveProject(name)) == nil else { continue }
+                var manifest = original
+                manifest.projectName = request.projectName
+                try store.write(manifest, to: directory)
+            }
+        } catch { showError(error.localizedDescription); return }
+        retryFailedProcessing()
+    }
+
+    func cancelMissingProjectRetry() {
+        missingProjectRetry = nil
     }
 
     func showPendingMeetingsInFinder() {
@@ -671,10 +702,13 @@ final class AppModel: ObservableObject {
                 let destination = try await process(job)
                 waitingForProcessingCount = max(0, waitingForProcessingCount - 1)
                 refreshArchive()
-                if !isRecording { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
+                let title = recentMeetings.first { $0.url.standardizedFileURL == destination.standardizedFileURL }?.title
+                MeetingNotifications.post(title: "Meeting ready", body: title ?? destination.lastPathComponent, folder: destination)
             } catch {
                 if case ProviderError.authentication = error { keySaved = false }
                 processingText = error.localizedDescription
+                MeetingNotifications.post(title: "Processing needs attention",
+                                          body: "The recording is saved locally. \(error.localizedDescription)", folder: nil)
             }
             currentProcessingPath = nil
             refreshPendingStatus()
@@ -725,19 +759,15 @@ final class AppModel: ObservableObject {
 
     private var canChangeArchive: Bool {
         guard !isRecording, !isChangingRecording, !isProcessing, !isImporting else {
-            fail("Wait for recording and processing to finish before changing the archive.")
+            showError("Wait for recording and processing to finish before changing the archive.")
             return false
         }
         let store = ArchiveStore(root: URL(filePath: archiveRootPath, directoryHint: .isDirectory))
         guard (try? store.hasPendingSessions()) == false else {
-            fail("Pending meetings exist.")
+            showError("Finish or discard pending meetings before changing the archive.")
             return false
         }
         return true
-    }
-
-    private func fail(_ message: String) {
-        phase = .failed(message)
     }
 
     private func setArchiveRoot(_ url: URL) {
@@ -781,7 +811,13 @@ final class AppModel: ObservableObject {
         return true
     }
 
+    /// The panel shows errors inline; standalone windows keep a standard alert.
     private func showError(_ message: String) {
+        if isPanelOpen {
+            notice = PanelNotice(message: message, isError: true)
+            return
+        }
+        NSApplication.shared.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "MeetingLog"
@@ -816,6 +852,54 @@ enum AppConfigurationError: LocalizedError {
         switch self {
         case .archiveRoot: "Choose an archive folder first."
         case .apiKey: "Save an API provider configuration first."
+        }
+    }
+}
+
+struct PanelNotice: Identifiable {
+    let id = UUID()
+    let message: String
+    var isError = false
+    var undo: (() -> Void)? = nil
+}
+
+struct MissingProjectRetry: Equatable {
+    let count: Int
+    let projectName: String
+    let displayPath: String
+}
+
+/// Completion replaces the former automatic Finder reveal; clicking a notification reveals the meeting.
+@MainActor
+enum MeetingNotifications {
+    private static let delegate = Delegate()
+
+    static func post(title: String, body: String, folder: URL?) {
+        // Unbundled check executables have no notification identity.
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        center.delegate = delegate
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        if let folder { content.userInfo = ["folder": folder.path] }
+        Task {
+            guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
+            try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        }
+    }
+
+    private final class Delegate: NSObject, UNUserNotificationCenterDelegate {
+        func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async
+            -> UNNotificationPresentationOptions { [.banner, .sound] }
+
+        func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+            guard let path = response.notification.request.content.userInfo["folder"] as? String else { return }
+            await MainActor.run {
+                if FileManager.default.fileExists(atPath: path) {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: path)])
+                }
+            }
         }
     }
 }

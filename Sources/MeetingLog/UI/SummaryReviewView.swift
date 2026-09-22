@@ -7,6 +7,9 @@ struct SummaryReviewView: View {
     @State private var selection: URL?
     @State private var handledRequestID: UUID?
     @State private var current = ""
+    @State private var currentChinese: String?
+    @State private var showsTranscript = false
+    @State private var highlightedLine: Int?
     @State private var revision: SummaryRevision?
     @State private var task: Task<Void, Never>?
     @State private var error: String?
@@ -157,11 +160,15 @@ struct SummaryReviewView: View {
                         }
                         .disabled(busy || revision != nil || !model.canMoveMeeting(meeting))
                         } label: { Label("Files", systemImage: "folder") }
+                        .fixedSize()
+                        Toggle(isOn: $showsTranscript) { Label("Transcript", systemImage: "text.quote") }
+                            .toggleStyle(.button)
+                            .help("Show the transcript. Click an L reference in a summary to jump to its line.")
                     }.controlSize(.regular)
                     if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                     if saved { Label("Summary saved. The previous version is backed up.", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
                     HStack(alignment: .top, spacing: 16) {
-                        preview("Current summary", text: chinesePreview ? ((try? String(contentsOf: meeting.url.appending(path: "summary_cn.md"), encoding: .utf8)) ?? "No Chinese summary yet.") : current, showTitle: chinesePreview || changedTitle)
+                        preview("Current summary", text: chinesePreview ? (currentChinese ?? "No Chinese summary yet.") : current, showTitle: chinesePreview || changedTitle)
                         if let revision { preview("New summary", text: chinesePreview ? revision.chineseMarkdown : revision.markdown, showTitle: chinesePreview || changedTitle) }
                     }
                     Divider()
@@ -190,6 +197,23 @@ struct SummaryReviewView: View {
                     ContentUnavailableView("Choose a meeting", systemImage: "doc.text", description: Text("Completed meetings with saved transcripts appear here."))
                 }
             }.padding(20).frame(minWidth: 550, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .environment(\.openURL, OpenURLAction { url in
+                guard let line = SummaryMarkdown.line(from: url) else { return .systemAction }
+                highlightedLine = line
+                showsTranscript = true
+                return .handled
+            })
+            .inspector(isPresented: $showsTranscript) {
+                Group {
+                    if let meeting {
+                        TranscriptPane(meetingURL: meeting.url, evidenceFile: evidenceFileName(for: meeting),
+                                       highlightedLine: $highlightedLine)
+                    } else {
+                        ContentUnavailableView("No meeting selected", systemImage: "text.quote")
+                    }
+                }
+                .inspectorColumnWidth(min: 300, ideal: 380, max: 600)
+            }
         }
         .frame(minWidth: 850, minHeight: 550)
         .onAppear {
@@ -271,8 +295,9 @@ struct SummaryReviewView: View {
         } catch { self.error = error.localizedDescription }
     }
     private func loadCurrent() {
-        error = nil; saved = false; revision = nil
-        guard let meeting else { current = ""; return }
+        error = nil; saved = false; revision = nil; highlightedLine = nil
+        guard let meeting else { current = ""; currentChinese = nil; return }
+        currentChinese = try? String(contentsOf: meeting.url.appending(path: "summary_cn.md"), encoding: .utf8)
         let context = (try? store.meetingContext(for: meeting.projectName)) ?? ""
         missingContext = context.components(separatedBy: .newlines).allSatisfy {
             let line = $0.trimmingCharacters(in: .whitespaces)
@@ -307,6 +332,7 @@ struct SummaryReviewView: View {
         do {
             try service.save(revision)
             current = revision.markdown
+            currentChinese = revision.chineseMarkdown
             if let refreshed = try? store.recentMeetings(limit: Int.max) { meetings = refreshed }
             self.revision = nil; error = nil; saved = true
         } catch { self.error = error.localizedDescription }
@@ -318,37 +344,58 @@ private struct SummaryMarkdownView: View {
     let markdown: String
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(markdown.components(separatedBy: .newlines).enumerated()), id: \.offset) { _, line in
-                if line.hasPrefix("| Task |") || line.hasPrefix("| ---") {
-                    EmptyView()
-                } else if line.hasPrefix("| ") {
-                    let cells = line.split(separator: "|", omittingEmptySubsequences: false).dropFirst().dropLast().map {
-                        String($0).trimmingCharacters(in: .whitespaces)
-                            .replacingOccurrences(of: "<br>", with: "\n")
-                            .replacingOccurrences(of: "&#124;", with: "|")
-                            .replacingOccurrences(of: "&lt;", with: "<")
-                            .replacingOccurrences(of: "&gt;", with: ">")
-                            .replacingOccurrences(of: "&amp;", with: "&")
-                    }
-                    if cells.count == 4 {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(cells[0]).fontWeight(.medium)
-                            Text("Owner: \(cells[1]) · Deadline: \(cells[2])").font(.caption).foregroundStyle(.secondary)
-                            if cells[3] != "—" { Text(cells[3]).font(.callout).foregroundStyle(.secondary) }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
-                            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-                    } else { Text(line) }
-                } else if line.hasPrefix("## ") {
-                    Text(String(line.dropFirst(3))).font(.headline).padding(.top, 10)
-                } else if line.hasPrefix("# ") {
-                    Text(String(line.dropFirst(2))).font(.title3.bold())
-                } else if line.hasPrefix("- ") {
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("•").foregroundStyle(.secondary)
-                        Text(.init(String(line.dropFirst(2)))).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                } else if !line.isEmpty { Text(.init(line)) }
+            ForEach(Array(SummaryMarkdown.parse(markdown).enumerated()), id: \.offset) { _, block in
+                view(for: block)
             }
         }
+    }
+
+    @ViewBuilder
+    private func view(for block: SummaryMarkdown) -> some View {
+        switch block {
+        case let .heading(level, text):
+            Text(SummaryMarkdown.inline(text))
+                .font(level == 1 ? .title3.bold() : level == 2 ? .headline : .subheadline.weight(.semibold))
+                .padding(.top, level == 1 ? 0 : 10)
+        case let .bullet(marker, text, depth):
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(marker).foregroundStyle(.secondary).monospacedDigit()
+                Text(SummaryMarkdown.inline(text)).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.leading, CGFloat(depth) * 16)
+        case let .detail(text, depth):
+            Text(SummaryMarkdown.inline(text))
+                .font(.callout).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 16 + CGFloat(depth) * 16)
+        case let .quote(text):
+            Text(SummaryMarkdown.inline(text))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 3) }
+        case let .table(header, rows):
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in tableRow(row, header: header) }
+        case let .paragraph(text):
+            Text(SummaryMarkdown.inline(text))
+        case .rule:
+            Divider()
+        }
+    }
+
+    /// Rows render as cards: first column as the title, short middle columns as a caption,
+    /// and a final long column (such as context and evidence) as the body.
+    private func tableRow(_ cells: [String], header: [String]) -> some View {
+        let caption = cells.count > 2 ? Array(cells.dropFirst().dropLast()) : Array(cells.dropFirst())
+        let captionText = caption.enumerated().map { index, value in
+            index + 1 < header.count ? "\(header[index + 1]): \(value)" : value
+        }.joined(separator: " · ")
+        let body = cells.count > 2 ? cells.last : nil
+        return VStack(alignment: .leading, spacing: 6) {
+            if let title = cells.first { Text(SummaryMarkdown.inline(title)).fontWeight(.medium) }
+            if !captionText.isEmpty { Text(SummaryMarkdown.inline(captionText)).font(.caption).foregroundStyle(.secondary) }
+            if let body, body != "—" { Text(SummaryMarkdown.inline(body)).font(.callout).foregroundStyle(.secondary) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(10)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
     }
 }

@@ -5,6 +5,7 @@ struct AudioChunk: Sendable {
     let url: URL
     let startSeconds: Double
     let endSeconds: Double
+    var track: TranscriptTrack? = nil
 }
 
 enum PendingCaptureInput: Equatable {
@@ -85,6 +86,37 @@ struct MediaProcessor {
     }
 
     func prepareAudio(from capture: URL, in directory: URL, durationLimit: TimeInterval? = nil) async throws -> (audio: URL, chunks: [AudioChunk]) {
+        let (audio, chunkDirectory, windows) = try await preparePlayback(from: capture, in: directory, durationLimit: durationLimit)
+        var result: [AudioChunk] = []
+        for (index, window) in windows.enumerated() {
+            let url = chunkDirectory.appending(path: String(format: "%04d.m4a", index))
+            try await exportChunk(from: audio, to: url, start: window.start, end: window.end)
+            result.append(AudioChunk(url: url, startSeconds: window.start, endSeconds: window.end))
+        }
+        return (audio, result)
+    }
+
+    /// Chunks each raw track on the playback windows, so per-track turns merge on one timeline.
+    /// A window past the end of a shorter track has no block for that track.
+    func prepareTrackAudio(from capture: URL, tracks: [(TranscriptTrack, URL)], in directory: URL) async throws -> (audio: URL, chunks: [AudioChunk]) {
+        let (audio, chunkDirectory, windows) = try await preparePlayback(from: capture, in: directory, durationLimit: nil)
+        var result: [AudioChunk] = []
+        for (track, source) in tracks {
+            let trackDirectory = chunkDirectory.appending(path: track.rawValue, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: trackDirectory, withIntermediateDirectories: true)
+            let trackDuration = try await AVURLAsset(url: source).load(.duration).seconds
+            guard trackDuration.isFinite, trackDuration > 0 else { throw MediaError.emptyRecording }
+            for (index, window) in windows.enumerated() where window.start < trackDuration - 1 {
+                let url = trackDirectory.appending(path: String(format: "%04d.m4a", index))
+                try await exportChunk(from: source, to: url, start: window.start, end: min(window.end, trackDuration))
+                result.append(AudioChunk(url: url, startSeconds: window.start, endSeconds: window.end, track: track))
+            }
+        }
+        return (audio, result.sorted { ($0.startSeconds, $0.track == .system ? 0 : 1) < ($1.startSeconds, $1.track == .system ? 0 : 1) })
+    }
+
+    private func preparePlayback(from capture: URL, in directory: URL, durationLimit: TimeInterval?) async throws
+        -> (audio: URL, chunkDirectory: URL, windows: [(start: Double, end: Double)]) {
         let audio = directory.appending(path: "audio.m4a")
         if !FileManager.default.fileExists(atPath: audio.path) {
             try await export(source: capture, destination: audio, range: nil)
@@ -98,25 +130,24 @@ struct MediaProcessor {
         let chunkDirectory = directory.appending(path: "chunks", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: chunkDirectory, withIntermediateDirectories: true)
         let blockDuration = try Self.chunkDuration(in: chunkDirectory)
-        var result: [AudioChunk] = []
+        var windows: [(start: Double, end: Double)] = []
         var start = 0.0
-        var index = 0
         while start < duration {
             let end = min(start + blockDuration, duration)
-            let url = chunkDirectory.appending(path: String(format: "%04d.m4a", index))
-            if !FileManager.default.fileExists(atPath: url.path) {
-                let range = CMTimeRange(
-                    start: CMTime(seconds: start, preferredTimescale: 600),
-                    end: CMTime(seconds: end, preferredTimescale: 600)
-                )
-                try await export(source: audio, destination: url, range: range, speech: true)
-            }
-            result.append(AudioChunk(url: url, startSeconds: start, endSeconds: end))
+            windows.append((start, end))
             if end == duration { break }
             start = end - Self.overlapSeconds
-            index += 1
         }
-        return (audio, result)
+        return (audio, chunkDirectory, windows)
+    }
+
+    private func exportChunk(from source: URL, to url: URL, start: Double, end: Double) async throws {
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        let range = CMTimeRange(
+            start: CMTime(seconds: start, preferredTimescale: 600),
+            end: CMTime(seconds: end, preferredTimescale: 600)
+        )
+        try await export(source: source, destination: url, range: range, speech: true)
     }
 
     // Keep cached audio and transcript checkpoints aligned when resuming older sessions.

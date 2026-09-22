@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var key = ""
     @State private var testResult: String?
     @State private var confirmingRemoval = false
+    @State private var confirmingDiscard = false
     @State private var showingDetails = false
 
     private enum SettingsPage: String, CaseIterable {
@@ -53,6 +54,12 @@ struct SettingsView: View {
             }
         } message: {
             Text("Existing meetings stay in your archive. New recordings will wait locally until you configure a provider again.")
+        }
+        .confirmationDialog("Discard pending meetings?", isPresented: $confirmingDiscard) {
+            Button("Move to Trash", role: .destructive) { model.discardPendingMeetings() }
+        } message: {
+            let count = model.pendingMeetingCount
+            Text("\(count) unfinished \(count == 1 ? "meeting" : "meetings") will be moved to the Trash and will no longer be processed.")
         }
     }
 
@@ -110,7 +117,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Some recordings are waiting for processing. Finish them before changing the archive folder.")
                             .font(.caption).foregroundStyle(.secondary)
-                        Button("Move pending recordings to Trash…", role: .destructive) { model.discardPendingMeetings() }
+                        Button("Move pending recordings to Trash…", role: .destructive) { confirmingDiscard = true }
                             .disabled(archiveBusy)
                     }
                 }

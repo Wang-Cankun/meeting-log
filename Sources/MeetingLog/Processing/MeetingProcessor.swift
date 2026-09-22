@@ -21,17 +21,22 @@ struct MeetingProcessor {
             let prepared: (audio: URL, chunks: [AudioChunk])
             switch MediaProcessor.pendingInput(in: directory) {
             case let .combined(capture):
-                prepared = try await MediaProcessor().prepareAudio(from: capture, in: directory)
+                if let tracks = try separateTracks(in: directory, capture: capture, preparation: capturePreparation) {
+                    prepared = try await MediaProcessor().prepareTrackAudio(from: capture, tracks: tracks, in: directory)
+                } else {
+                    prepared = try await MediaProcessor().prepareAudio(from: capture, in: directory)
+                }
             case let .importedParts(parts):
                 prepared = try await MediaProcessor().prepareImportedAudio(parts: parts, in: directory)
             default:
                 throw MediaError.emptyRecording
             }
             var blocks = try loadBlocks(in: directory) ?? prepared.chunks.enumerated().map {
-                TranscriptBlock(id: $0.offset, startSeconds: $0.element.startSeconds, endSeconds: $0.element.endSeconds)
+                TranscriptBlock(id: $0.offset, startSeconds: $0.element.startSeconds, endSeconds: $0.element.endSeconds, track: $0.element.track)
             }
 
-            guard blocks.count == prepared.chunks.count else { throw ProcessingError.incompleteCoverage }
+            guard blocks.count == prepared.chunks.count,
+                  zip(blocks, prepared.chunks).allSatisfy({ $0.track == $1.track }) else { throw ProcessingError.incompleteCoverage }
             let context = try store.globalContext()
             let resolvedProjectName = try store.resolveProject(projectName).name
             let projectContext = try store.meetingContext(for: resolvedProjectName)
@@ -41,7 +46,7 @@ struct MeetingProcessor {
             let chunks = prepared.chunks
             blocks = try await TranscriptionBatch.run(blocks: blocks) { index in
                 let chunk = chunks[index]
-                let prompt = Prompts.transcription(context: transcriptionContext, start: chunk.startSeconds, end: chunk.endSeconds)
+                let prompt = Prompts.transcription(context: transcriptionContext, start: chunk.startSeconds, end: chunk.endSeconds, track: chunk.track)
                 for attempt in 0..<2 {
                     let feedback = attempt == 0 ? "" : "\nYour previous response failed format/timestamp validation. Re-transcribe the audio using the exact output contract; the last timestamp must be strictly before the excerpt end."
                     let response = try await client.transcribe(audio: chunk.url, prompt: prompt + feedback)
@@ -137,6 +142,18 @@ struct MeetingProcessor {
             try? store.write(manifest, to: directory)
             throw error
         }
+    }
+
+    /// Transcribes microphone and computer audio separately when both raw tracks reached the capture mix.
+    /// Sessions whose saved coverage predates per-track blocks keep their mixed transcription.
+    private func separateTracks(in directory: URL, capture: URL, preparation: CapturePreparation?) throws -> [(TranscriptTrack, URL)]? {
+        let system = directory.appending(path: "system-audio.caf")
+        let microphone = directory.appending(path: "microphone.m4a")
+        let fm = FileManager.default
+        guard capture.lastPathComponent == "capture.mov", preparation?.mode == .complete,
+              fm.fileExists(atPath: system.path), fm.fileExists(atPath: microphone.path) else { return nil }
+        if let saved = try loadBlocks(in: directory), !saved.isEmpty, saved.allSatisfy({ $0.track == nil }) { return nil }
+        return [(.system, system), (.microphone, microphone)]
     }
 
     private func saveBlocks(_ blocks: [TranscriptBlock], in directory: URL) throws {

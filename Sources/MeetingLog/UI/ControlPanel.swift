@@ -6,6 +6,7 @@ struct ControlPanel: View {
     @Environment(\.openSettings) private var openSettings
     @ObservedObject var model: AppModel
     @ObservedObject private var audioLevels: AudioLevels
+    @AppStorage("sourcesExpanded") private var sourcesExpanded = false
 
     init(model: AppModel) {
         self.model = model
@@ -16,15 +17,20 @@ struct ControlPanel: View {
         VStack(spacing: 0) {
             header
             VStack(spacing: 0) {
-                audioSources
-                Divider().padding(.leading, 44)
-                screenRow
+                if showsSourceDetails {
+                    audioSources
+                    Divider().padding(.leading, 44)
+                    screenRow
+                } else {
+                    sourceSummary
+                }
                 Divider().padding(.leading, 44)
                 projectRow
             }
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
             .padding(.horizontal, 16)
+            .animation(.snappy(duration: 0.2), value: showsSourceDetails)
 
             HStack(spacing: 10) {
                 recordingControl
@@ -32,14 +38,21 @@ struct ControlPanel: View {
                     openWindow(id: "import-audio")
                     NSApplication.shared.activate(ignoringOtherApps: true)
                 } label: {
-                    Label("Import audio", systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity)
+                    Image(systemName: "square.and.arrow.down")
+                        .frame(width: 28)
                 }
                 .controlSize(.large)
                 .help("Import a recording from your iPhone or Mac")
+                .accessibilityLabel("Import audio")
             }
             .padding(16)
 
+            if let notice = model.notice {
+                noticeBanner(notice)
+            }
+            if let retry = model.missingProjectRetry {
+                missingProjectPrompt(retry)
+            }
             if showsProcessingStatus {
                 processingStatus
             }
@@ -101,6 +114,104 @@ struct ControlPanel: View {
         return model.isRecording ? .red : .secondary
     }
 
+    /// Source settings rarely change between meetings, so they collapse unless something needs attention.
+    private var sourcesNeedAttention: Bool {
+        model.systemAudioError != nil
+            || !model.selectedSystemAudioIsAvailable
+            || (model.videoEnabled && !model.hasScreenSource)
+            || (model.microphoneEnabled && (model.microphones.isEmpty
+                || model.microphonePermission == .denied || model.microphonePermission == .restricted))
+    }
+
+    private var showsSourceDetails: Bool { sourcesExpanded || sourcesNeedAttention }
+
+    private var sourceSummaryText: String {
+        var parts = [model.selectedSystemAudioBundleID == nil ? "All apps" : model.selectedSystemAudioName]
+        parts.append(model.microphoneEnabled ? selectedMicrophoneName : "No mic")
+        if model.videoEnabled { parts.append(model.selectedScreenSource ?? "Screen") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var sourceSummary: some View {
+        Button { sourcesExpanded = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "waveform")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(sourceSummaryText)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    LevelMeter(
+                        source: "Audio",
+                        state: model.systemAudioStateText,
+                        level: max(audioLevels.system, model.microphoneEnabled ? audioLevels.microphone : 0),
+                        enabled: true
+                    )
+                }
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .help("Show audio and screen sources")
+        .accessibilityLabel("Sources: \(sourceSummaryText)")
+        .accessibilityHint("Shows source settings")
+    }
+
+    private func noticeBanner(_ notice: PanelNotice) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: notice.isError ? "exclamationmark.triangle" : "checkmark.circle")
+                .foregroundStyle(notice.isError ? .orange : .secondary)
+                .frame(width: 24)
+                .accessibilityHidden(true)
+            Text(notice.message)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let undo = notice.undo {
+                Button("Undo", action: undo).controlSize(.small)
+            }
+            Button { model.dismissNotice() } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+        .task(id: notice.id) {
+            guard !notice.isError else { return }
+            try? await Task.sleep(for: .seconds(8))
+            if model.notice?.id == notice.id { model.dismissNotice() }
+        }
+    }
+
+    private func missingProjectPrompt(_ retry: MissingProjectRetry) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(retry.count) pending \(retry.count == 1 ? "meeting refers" : "meetings refer") to a missing project. Retry in \(retry.displayPath)? Audio and completed transcripts are kept.")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { model.cancelMissingProjectRetry() }
+                Button("Use this project") { model.confirmMissingProjectRetry() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canRetryProcessing)
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+    }
+
     private var audioSources: some View {
         VStack(spacing: 0) {
             systemAudioRow.padding(.vertical, 10)
@@ -126,6 +237,15 @@ struct ControlPanel: View {
                 Spacer(minLength: 6)
                 systemAudioMenu
                     .frame(maxWidth: 150, alignment: .trailing)
+                if !sourcesNeedAttention {
+                    Button { sourcesExpanded = false } label: {
+                        Image(systemName: "chevron.up").font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Collapse sources")
+                    .accessibilityLabel("Collapse sources")
+                }
             }
             LevelMeter(
                 source: "Mac audio",

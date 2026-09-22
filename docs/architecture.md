@@ -14,7 +14,7 @@ menu bar panel
   -> pending session directory
   -> system audio + microphone mixdown to compatible capture.mov
   -> compressed audio + optional HEVC video
-  -> ten-minute audio blocks with ten-second overlap
+  -> ten-minute windows with ten-second overlap, chunked per raw track when both tracks were mixed
   -> configured OpenAI-compatible provider transcription coverage gate
   -> evidence-bound summary in the selected project
   -> project/meetings/session archive
@@ -46,7 +46,9 @@ menu bar panel
 
 Incomplete sessions remain under `<root>/.pending/<uuid>/` with `session.json`. Startup recovery resumes processing from that manifest. Pending sessions block archive relocation until they finish; Settings can move them to the Trash when they are no longer wanted.
 
-Project folders are the source of truth and may use Unicode names. Users create projects; the menu bar panel selects the destination project for each recording, using `Inbox` only when no destination was selected. Completed meeting folders use the recording start date followed immediately by the human-readable title, with `-2`, `-3`, and later suffixes for collisions. The menu panel lists the three most recent completed meetings; deletion moves the complete meeting directory to the macOS Trash.
+Project folders are the source of truth and may use Unicode names. Users create projects; the menu bar panel selects the destination project for each recording, using `Inbox` only when no destination was selected. Completed meeting folders use the recording start date followed immediately by the human-readable title, with `-2`, `-3`, and later suffixes for collisions. The menu panel lists the three most recent completed meetings; deletion moves the complete meeting directory to the macOS Trash immediately and offers Undo in the panel.
+
+The panel collapses source settings to a one-line summary with a combined level meter; they expand on request or automatically when a source needs attention. Feedback raised while the panel is open appears inline, because modal alerts detach from a menu bar panel; standalone windows keep standard alerts or SwiftUI confirmations. Reassigning pending meetings from a missing project is confirmed inline. Completed and failed processing posts a notification instead of opening Finder; clicking a completion notification reveals the meeting.
 
 System audio uses a private Core Audio process tap and aggregate device. All Mac audio is the default; one running application can be selected by bundle identifier. The tap handles preview and writes `system-audio.caf` during recording without using the screen picker.
 
@@ -74,6 +76,12 @@ Multi-file imports commit all source copies as one pending session. Ordered orig
 
 Transcription uses a bounded pool of three concurrent block requests within the active meeting. Results are checkpointed serially as each completes and assembled in source/time order. After a terminal block failure, the pool stops scheduling new work and drains in-flight requests so successful results remain recoverable; retry resumes only incomplete blocks. The meeting queue remains serial, and summary generation starts only after complete coverage. Provider calls make at most three attempts for rate limits, temporary server errors, and transient network failures, with exponential backoff and `Retry-After` support. Authentication and other permanent request failures are not automatically retried.
 
+## Speaker attribution from raw tracks
+
+When the capture receipt records a complete mix and both `system-audio.caf` and `microphone.m4a` remain, each ten-minute window is transcribed twice: once from computer audio and once from the microphone. Both use the playback windows, stored under `chunks/system/` and `chunks/microphone/`, and each block records its track in `coverage.json`. The renderer interleaves a window's turns by timestamp under one heading and fixes every microphone turn's label to `Me`; the model's label for that track is ignored. Silence placeholders are dropped when the window has speech. Cleanup removes a `Me` turn that repeats a nearby remote turn, which is loudspeaker echo.
+
+Imports, system-only recoveries, legacy combined captures, and sessions whose saved coverage has no track field keep single mixed-audio transcription.
+
 ## Readable transcript and bilingual summaries
 
 Upload chunks are mono AAC at 24 kHz and 48 kbps; the archive playback copy retains the normal Apple M4A export quality. Raw capture CAF files never enter provider requests. New chunks are speech-encoded before upload; existing cached chunks retain their previous encoding on retry.
@@ -85,6 +93,8 @@ Completed block output is retained as `transcript_raw.md`. One text-only request
 The reviewed summary is saved as `summary.md`; another text-only request produces Mainland Simplified Chinese `summary_cn.md` and a short Chinese folder title. Names, technical terms, exact evidence quotes and metadata remain traceable. Folder names use `MMddyyyy-<short-title>`, bounded to 32 title characters and 96 UTF-8 bytes. Old names remain discoverable. Global and project meeting instructions live in `meeting_context.md`; general `context.md` files are not ingested.
 
 Summary regeneration previews both languages, checks both files for concurrent edits, and backs up both before replacement. Regeneration preserves transcript and folder identity.
+
+The summary browser parses Markdown into headings, lists, indented continuation lines, quotes, and tables with any column count. Evidence references such as `L12` are links: clicking one opens the transcript inspector on the evidence file, highlights that line, and cues `audio.m4a` to the nearest preceding timestamp. Transcript timestamps play from that point. The inspector can switch to the readable copy, which has no line references.
 
 ## Nested meeting destinations
 

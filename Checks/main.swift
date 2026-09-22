@@ -313,6 +313,8 @@ try FileManager.default.removeItem(at: compatibilityRoot)
 try await checkConcurrentTranscription()
 try await checkSummaryRegeneration()
 try await checkCapturePreparation()
+try await checkSeparateTrackTranscription()
+checkSummaryMarkdown()
 print("MeetingLog check passed")
 
 // Optional real audio fixtures remain local; no provider requests are made.
@@ -488,7 +490,7 @@ final class FixtureProvider: URLProtocol, @unchecked Sendable {
         """
         let content: String
         if parts.contains(where: { $0["type"] as? String == "input_audio" }) {
-            let regex = try! NSRegularExpression(pattern: #"recording is (\d+:\d+)"#)
+            let regex = try! NSRegularExpression(pattern: #"covers (\d+:\d+)"#)
             let ns = prompt as NSString
             let match = regex.firstMatch(in: prompt, range: NSRange(location: 0, length: ns.length))!
             content = "[\(ns.substring(with: match.range(at: 1)))] Speaker A: Synthetic transcript."

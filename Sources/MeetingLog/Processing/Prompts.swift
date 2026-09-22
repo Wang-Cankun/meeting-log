@@ -16,7 +16,8 @@ enum Prompts {
         }
         let speakers = track == .microphone
             ? "Label every turn Me. Transcribe only the nearby primary voice."
-            : "Label each turn. Use a person's name only when they introduce themselves, are unambiguously addressed by name, or the context gives a confirmed voice mapping. Otherwise use Speaker A, Speaker B, and so on, consistently within this excerpt. Labels do not carry over to other excerpts."
+            : "Label each turn. Use a person's name only when, in this excerpt, the speaker introduces themselves or is unambiguously addressed by name just before replying. A people list, roles, or a mentioned name in context never identifies a voice. Otherwise use Speaker A, Speaker B, and so on, consistently within this excerpt. Labels do not carry over to other excerpts."
+                + (track == .system ? " The recording user is never on this track, so never label a turn with the recording user's name or Me." : "")
         return """
         Transcribe this audio excerpt verbatim. It covers \(clock(start))–\(clock(end)) of the full recording.
         \(source)

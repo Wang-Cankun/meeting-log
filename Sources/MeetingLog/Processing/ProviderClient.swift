@@ -59,12 +59,17 @@ struct ProviderClient: Sendable {
                 ?? "HTTP \(http.statusCode)"
             throw ProviderError.http(status: http.statusCode, message: message, retryAfter: ProviderRetry.retryAfter(http.value(forHTTPHeaderField: "Retry-After")))
         }
-        let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
-        if decoded.choices.first?.finish_reason == "length" {
+        // Long requests can fail upstream after a 200 status; the body then carries an error instead of choices.
+        guard let decoded = try? JSONDecoder().decode(ChatResponse.self, from: data) else { throw ProviderError.invalidResponse }
+        if let error = decoded.error ?? decoded.choices?.first?.error {
+            throw ProviderError.http(status: error.code ?? 502, message: error.message, retryAfter: nil)
+        }
+        let choice = decoded.choices?.first
+        if choice?.finish_reason == "length" {
             throw ProviderError.request("The provider truncated its output. Retry with a model that supports a longer response.")
         }
-        guard let content = decoded.choices.first?.message.content, !content.isEmpty else {
-            throw ProviderError.invalidResponse
+        guard let content = choice?.message?.content, !content.isEmpty else {
+            throw ProviderError.emptyResponse(finishReason: choice?.finish_reason)
         }
         return content
     }
@@ -102,12 +107,31 @@ private struct ChatRequest: Encodable, Sendable {
 }
 
 private struct ChatResponse: Decodable {
-    struct Choice: Decodable { struct Message: Decodable { let content: String }; let message: Message; let finish_reason: String? }
-    let choices: [Choice]
+    struct Choice: Decodable {
+        struct Message: Decodable { let content: String? }
+        let message: Message?
+        let finish_reason: String?
+        let error: APIError?
+    }
+    let choices: [Choice]?
+    let error: APIError?
+}
+
+private struct APIError: Decodable {
+    let message: String
+    let code: Int?
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        message = try values.decode(String.self, forKey: .message)
+        // Providers send numeric or string codes; only numeric HTTP-like codes drive retries.
+        code = (try? values.decode(Int.self, forKey: .code)) ?? (try? values.decode(String.self, forKey: .code)).flatMap(Int.init)
+    }
+
+    private enum CodingKeys: String, CodingKey { case message, code }
 }
 
 private struct APIErrorEnvelope: Decodable {
-    struct APIError: Decodable { let message: String }
     let error: APIError
 }
 
@@ -117,6 +141,7 @@ enum ProviderError: LocalizedError {
     case authentication
     case request(String)
     case http(status: Int, message: String, retryAfter: TimeInterval?)
+    case emptyResponse(finishReason: String?)
 
     var errorDescription: String? {
         switch self {
@@ -124,6 +149,7 @@ enum ProviderError: LocalizedError {
         case let .http(_, message, _): message
         case .invalidResponse: "The provider returned an invalid response."
         case .authentication: "The provider rejected the API key."
+        case let .emptyResponse(reason): "The provider returned no text\(reason.map { " (finish reason: \($0))" } ?? ""). Retry later."
         }
     }
 }
@@ -150,6 +176,7 @@ enum ProviderRetry {
            status == 429 || status == 408 || (500...599).contains(status) {
             return max(backoff, retryAfter ?? 0)
         }
+        if case ProviderError.emptyResponse = error { return backoff }
         if let error = error as? URLError,
            [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed].contains(error.code) {
             return backoff

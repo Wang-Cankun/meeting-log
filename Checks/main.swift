@@ -315,6 +315,7 @@ try await checkSummaryRegeneration()
 try await checkCapturePreparation()
 try await checkSeparateTrackTranscription()
 checkSummaryMarkdown()
+try await checkInBodyProviderError()
 print("MeetingLog check passed")
 
 // Optional real audio fixtures remain local; no provider requests are made.

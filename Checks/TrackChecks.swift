@@ -1,3 +1,4 @@
+import Synchronization
 import AVFoundation
 import Foundation
 
@@ -16,6 +17,10 @@ func checkSeparateTrackTranscription() async throws {
         TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete, text: "[00:03] Me: Hello?"),
     ])
     precondition(silent == "[00:03] Me: Hello?", "Silence placeholders must not interleave with speech")
+    let script = MarkdownRenderer.merged([
+        TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, status: .complete, text: "[00:01] Speaker A: 這個 GPU server 還要修。"),
+    ])
+    precondition(script == "[00:01] Speaker A: 这个 GPU server 还要修。", "Chinese must be Simplified; English stays unchanged")
 
     let root = FileManager.default.temporaryDirectory.appending(path: "track-check-\(UUID())")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -127,4 +132,34 @@ func checkSummaryMarkdown() {
     let links = SummaryMarkdown.inline("Evidence: L12: “HLA2 L3”, see URL1").runs.compactMap(\.link)
     precondition(links.compactMap(SummaryMarkdown.line(from:)) == [12, 3], "\(links)")
     print("Summary Markdown passed: tables, continuation lines, numbered lists and reference links")
+}
+
+/// A 200 response whose body carries an upstream error must retry, not fail as undecodable data.
+func checkInBodyProviderError() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [InBodyErrorFixture.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let client = ProviderClient(baseURL: "https://in-body.invalid", apiKey: "fixture", model: "fixture", session: session)
+    InBodyErrorFixture.requests.withLock { $0 = 0 }
+    let text = try await client.complete(prompt: "Reply with OK.")
+    precondition(text == "OK" && InBodyErrorFixture.requests.withLock { $0 } == 2)
+    precondition(ProviderRetry.delay(for: ProviderError.emptyResponse(finishReason: nil), attempt: 0) != nil)
+    print("Provider body errors passed: in-body upstream error retried, empty text retryable")
+}
+
+private final class InBodyErrorFixture: URLProtocol, @unchecked Sendable {
+    static let requests = Mutex(0)
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let count = Self.requests.withLock { $0 += 1; return $0 }
+        let body: [String: Any] = count == 1
+            ? ["error": ["message": "Upstream provider failed", "code": 502]]
+            : ["choices": [["message": ["content": "OK"], "finish_reason": "stop"]]]
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: body))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

@@ -46,12 +46,12 @@ enum MarkdownRenderer {
     /// Interleaves per-track turns by timestamp. The microphone label is fixed rather than trusted to the model.
     static func merged(_ blocks: [TranscriptBlock]) -> String {
         guard blocks.contains(where: { $0.track != nil }) else {
-            return blocks.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n\n")
+            return blocks.map { simplifiedChinese($0.text).trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n\n")
         }
         var turns: [(time: Int, line: String, silent: Bool)] = []
         for block in blocks {
             var time = Int(block.startSeconds)
-            for line in block.text.components(separatedBy: .newlines) where !line.trimmingCharacters(in: .whitespaces).isEmpty {
+            for line in simplifiedChinese(block.text).components(separatedBy: .newlines) where !line.trimmingCharacters(in: .whitespaces).isEmpty {
                 let ns = line as NSString
                 guard let match = turnPattern.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else {
                     turns.append((time, line, false))
@@ -68,6 +68,12 @@ enum MarkdownRenderer {
         let kept = spoken.isEmpty ? Array(turns.prefix(1)) : spoken
         return kept.enumerated().sorted { ($0.element.time, $0.offset) < ($1.element.time, $1.offset) }
             .map(\.element.line).joined(separator: "\n\n")
+    }
+
+    /// Models sometimes write Chinese speech in Traditional characters. Converting script is deterministic
+    /// and leaves other languages untouched; it runs before the transcript becomes summary evidence.
+    static func simplifiedChinese(_ text: String) -> String {
+        text.applyingTransform(StringTransform("Hant-Hans"), reverse: false) ?? text
     }
 
     private static let turnPattern = try! NSRegularExpression(pattern: #"^\[(\d{2,}):([0-5]\d)\] ([^:\n]+): (.+)$"#)

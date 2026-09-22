@@ -23,6 +23,7 @@
 | Timer-led recording panel | accepted | The panel shows elapsed time while recording; the menu bar uses a static recording indicator because self-updating SwiftUI content in a `MenuBarExtra` label caused an unbounded redraw loop on macOS 26 |
 | Explicit partial recovery | accepted | A permanent preparing/ready receipt records complete versus system-only mixing before media publication; excluded original tracks and fixed bilingual warnings survive archiving and regeneration |
 | Microphone track identifies the recording user | accepted | Complete captures transcribe computer audio and microphone separately; microphone turns are always labeled `Me`, trading one extra audio upload per window for deterministic attribution |
+| Simplified Chinese, Roman-letter names | accepted | Transcripts stay in the spoken language with Chinese normalized to Simplified characters; personal names use confirmed spellings or Pinyin because characters cannot be verified from sound |
 | Generic prompts | accepted | Prompts state classification rules without examples from specific meetings; meeting-specific cases belong in evaluation material, not in every request |
 | Inline panel feedback | accepted | The menu bar panel uses inline notices, Undo, and confirmations instead of modal alerts; completion uses notifications instead of opening Finder |
 | Original transcription owns summary evidence | accepted | Drafts, review and line references use raw transcription; only old archives without it fall back to the readable transcript, with the source stated explicitly |

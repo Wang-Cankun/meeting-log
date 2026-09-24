@@ -69,6 +69,45 @@ struct MeetingAnalysis: Codable, Equatable {
     var inventory: [EvidenceNote]? = nil
 }
 
+// Prompts ask for empty strings and arrays when a field is unsupported; JSON mode does not enforce the schema,
+// so a model that omits such a field means the same thing and must not fail the whole meeting.
+extension ActionItem {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(assignee: try values.decodeIfPresent(String.self, forKey: .assignee) ?? "",
+                  task: try values.decode(String.self, forKey: .task),
+                  deadline: try values.decodeIfPresent(String.self, forKey: .deadline) ?? "",
+                  context: try values.decodeIfPresent(String.self, forKey: .context) ?? "",
+                  evidence: try values.decodeIfPresent([EvidenceReference].self, forKey: .evidence))
+    }
+}
+
+extension MeetingDecision {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(decision: try values.decode(String.self, forKey: .decision),
+                  reasoning: try values.decodeIfPresent(String.self, forKey: .reasoning) ?? "",
+                  evidence: try values.decodeIfPresent([EvidenceReference].self, forKey: .evidence))
+    }
+}
+
+extension MeetingAnalysis {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(title: try values.decode(String.self, forKey: .title),
+                  projectName: try values.decodeIfPresent(String.self, forKey: .projectName) ?? "",
+                  summary: try values.decodeIfPresent([String].self, forKey: .summary) ?? [],
+                  actionItems: try values.decodeIfPresent([ActionItem].self, forKey: .actionItems) ?? [],
+                  decisions: try values.decodeIfPresent([MeetingDecision].self, forKey: .decisions) ?? [],
+                  keyTopics: try values.decodeIfPresent([String].self, forKey: .keyTopics) ?? [],
+                  uncertainties: try values.decodeIfPresent([String].self, forKey: .uncertainties),
+                  milestones: try values.decodeIfPresent([EvidenceNote].self, forKey: .milestones),
+                  openQuestions: try values.decodeIfPresent([EvidenceNote].self, forKey: .openQuestions),
+                  deferredWork: try values.decodeIfPresent([EvidenceNote].self, forKey: .deferredWork),
+                  inventory: try values.decodeIfPresent([EvidenceNote].self, forKey: .inventory))
+    }
+}
+
 struct ProjectContext: Equatable {
     let name: String
     let markdown: String
@@ -183,7 +222,7 @@ struct SummaryOpenRequest: Equatable {
 }
 
 struct EvidenceReference: Codable, Equatable {
-    let line: Int
+    var line: Int
     let quote: String
     var verified: Bool? = nil
 }

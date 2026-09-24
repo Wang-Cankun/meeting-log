@@ -8,6 +8,8 @@ struct SettingsView: View {
     @State private var modelID = ""
     @State private var key = ""
     @State private var testResult: String?
+    @State private var speechEndpoint = ""
+    @State private var speechKey = ""
     @State private var confirmingRemoval = false
     @State private var confirmingDiscard = false
     @State private var showingDetails = false
@@ -140,7 +142,7 @@ struct SettingsView: View {
                     TextField("", text: draft($baseURL),
                               prompt: Text("https://openrouter.ai/api/v1"))
                 }
-                field("Model", hint: "Must support audio input.") {
+                field("Model", hint: "Must support audio input unless a speech service is set below.") {
                     TextField("", text: draft($modelID),
                               prompt: Text("Provider model ID"))
                 }
@@ -190,9 +192,12 @@ struct SettingsView: View {
             .padding(.top, 2)
 
             Divider()
+            speech
+
+            Divider()
             DisclosureGroup("How processing & storage work", isExpanded: $showingDetails) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Audio is sent to this provider. Without a saved provider, recordings wait locally.")
+                    Text("Audio is sent to the speech service when one is saved, otherwise to this provider. Without a saved provider, recordings wait locally.")
                     Text("Testing sends a short text request, not audio. Saving resumes pending recordings.")
                     Text("The API key is stored unencrypted in your local app preferences.")
                 }
@@ -239,6 +244,50 @@ struct SettingsView: View {
         }
     }
 
+    private var speech: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Speech transcription (optional)").font(.headline)
+                Text("Azure Speech with \(SpeechTranscriber.model) transcribes each recording in one request with speaker separation. The provider above then handles text only.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            field("Speech endpoint", hint: "Azure AI Services or Speech resource URL") {
+                TextField("", text: $speechEndpoint, prompt: Text("https://<resource>.cognitiveservices.azure.com"))
+            }
+            field("Speech key", hint: nil) {
+                SecureField("", text: $speechKey, prompt: Text("Paste the resource key"))
+            }
+            HStack(spacing: 10) {
+                if model.isVerifyingSpeech {
+                    ProgressView().controlSize(.small)
+                    Text("Testing…").foregroundStyle(.secondary)
+                } else if let status = model.speechStatus {
+                    Text(status == "Connected" ? "Speech service verified and saved." : status)
+                        .font(.callout)
+                        .foregroundStyle(status == "Connected" ? .green : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                if model.speechTranscriber != nil {
+                    Button("Remove", role: .destructive) {
+                        model.removeSpeechConfiguration()
+                        speechEndpoint = ""
+                        speechKey = ""
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(model.isVerifyingSpeech || archiveBusy)
+                }
+                Button("Test & save") {
+                    Task { await model.testSpeechConfiguration(endpoint: speechEndpoint, key: speechKey) }
+                }
+                .disabled(speechEndpoint.isEmpty || speechKey.isEmpty || model.isVerifyingSpeech || archiveBusy)
+            }
+        }
+        .disabled(model.isVerifyingProvider)
+    }
+
     private var statusText: String {
         if let testResult {
             return testResult == "Connected" ? "Connection verified. Configuration saved." : testResult
@@ -260,6 +309,8 @@ struct SettingsView: View {
         baseURL = model.providerBaseURL
         modelID = model.selectedModelID
         key = model.apiKey
+        speechEndpoint = model.speechEndpoint
+        speechKey = model.speechKey
     }
 }
 

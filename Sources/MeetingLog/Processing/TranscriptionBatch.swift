@@ -3,10 +3,11 @@ import Foundation
 /// Owns result ordering and checkpoint writes; network work runs in child tasks.
 @MainActor
 enum TranscriptionBatch {
-    static let concurrencyLimit = 3
+    nonisolated static let concurrencyLimit = 8
 
     static func run(
         blocks original: [TranscriptBlock],
+        limit: Int = concurrencyLimit,
         transcribe: @escaping @Sendable (Int) async throws -> String,
         checkpoint: ([TranscriptBlock]) throws -> Void,
         progress: (Int, Int) -> Void
@@ -32,7 +33,7 @@ enum TranscriptionBatch {
                     }
                 }
             }
-            while next < min(concurrencyLimit, pending.count) {
+            while next < min(limit, pending.count) {
                 submit(pending[next])
                 next += 1
             }

@@ -13,6 +13,7 @@ swiftc \
   "$repo_dir/Sources/MeetingLog/Processing/CapturePreparation.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/AudioImport.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/ProviderClient.swift" \
+  "$repo_dir/Sources/MeetingLog/Processing/SpeechTranscriber.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/MeetingProcessor.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/TranscriptEvidence.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/TranscriptPolisher.swift" \
@@ -24,6 +25,7 @@ swiftc \
   "$repo_dir/Checks/ConcurrencyChecks.swift" \
   "$repo_dir/Checks/CaptureRecoveryChecks.swift" \
   "$repo_dir/Checks/TrackChecks.swift" \
+  "$repo_dir/Checks/SpeechChecks.swift" \
   "$repo_dir/Checks/main.swift" \
   -module-cache-path "$repo_dir/.build/check-module-cache" \
   -o "$check_dir/check"

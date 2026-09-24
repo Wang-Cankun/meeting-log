@@ -68,7 +68,9 @@ enum TranscriptEvidence {
     /// Reference quality is advisory: model paraphrases must not block a usable summary.
     static func annotateReferences(_ original: MeetingAnalysis, transcript: String) -> MeetingAnalysis {
         var analysis = original
-        let lines = transcript.components(separatedBy: .newlines)
+        // Whitespace is not evidence: speech services space mixed Chinese and English text inconsistently.
+        let compact: (String) -> String = { $0.filter { !$0.isWhitespace } }
+        let lines = transcript.components(separatedBy: .newlines).map(compact)
         var hasUnverified = false
         func checked(_ references: [EvidenceReference]?) -> [EvidenceReference]? {
             guard let references, !references.isEmpty else {
@@ -77,9 +79,12 @@ enum TranscriptEvidence {
             }
             return references.map { reference in
                 var result = reference
-                let quote = reference.quote.trimmingCharacters(in: .whitespacesAndNewlines)
-                result.verified = reference.line > 0 && reference.line <= lines.count && !quote.isEmpty
-                    && lines[reference.line - 1].contains(quote)
+                let quote = compact(reference.quote)
+                // Models occasionally cite the neighboring line; the quote itself decides which line it is.
+                let line = quote.isEmpty ? nil : [reference.line, reference.line - 1, reference.line + 1]
+                    .first { $0 > 0 && $0 <= lines.count && lines[$0 - 1].contains(quote) }
+                result.verified = line != nil
+                if let line { result.line = line }
                 if result.verified != true { hasUnverified = true }
                 return result
             }

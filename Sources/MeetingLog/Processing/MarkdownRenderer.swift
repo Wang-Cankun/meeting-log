@@ -93,14 +93,16 @@ enum MarkdownRenderer {
         ## Action items
 
         """
+        output += "\n"
         if value.actionItems.isEmpty {
             output += "None.\n"
         } else {
-            output += "| Task | Owner | Deadline | Context / evidence |\n| --- | --- | --- | --- |\n"
+            // A list, like the other sections, copies cleanly into chat and notes; tables do not.
             output += value.actionItems.map { item in
-                "| " + [item.task, item.assignee, item.deadline,
-                    [item.context, TranscriptEvidence.description(item.evidence)].filter { !$0.isEmpty }.joined(separator: "\n")]
-                    .map { tableCell($0.isEmpty ? "—" : $0) }.joined(separator: " | ") + " |"
+                "- \(oneLine(item.task))\n  Owner: \(oneLine(item.assignee).isEmpty ? "—" : oneLine(item.assignee))"
+                    + " · Deadline: \(oneLine(item.deadline).isEmpty ? "—" : oneLine(item.deadline))"
+                    + (item.context.isEmpty ? "" : "\n  \(oneLine(item.context))")
+                    + ((item.evidence ?? []).isEmpty ? "" : "\n  Evidence: \(TranscriptEvidence.description(item.evidence))")
             }.joined(separator: "\n") + "\n"
         }
         output += "\n## Decisions\n\n"
@@ -125,14 +127,9 @@ enum MarkdownRenderer {
         return output
     }
 
-    private static func tableCell(_ value: String) -> String {
-        value.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "|", with: "&#124;")
-            .replacingOccurrences(of: "\r\n", with: "<br>")
-            .replacingOccurrences(of: "\n", with: "<br>")
-            .replacingOccurrences(of: "\r", with: "<br>")
+    private static func oneLine(_ value: String) -> String {
+        value.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     private static func list(_ values: [String]) -> String {

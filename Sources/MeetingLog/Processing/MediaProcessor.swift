@@ -19,8 +19,11 @@ struct MediaProcessor {
     private final class ConversionInput: @unchecked Sendable {
         let file: AVAudioFile
         let buffer: AVAudioPCMBuffer
+        let endFrame: AVAudioFramePosition
         var error: Error?
-        init(file: AVAudioFile, buffer: AVAudioPCMBuffer) { self.file = file; self.buffer = buffer }
+        init(file: AVAudioFile, buffer: AVAudioPCMBuffer, endFrame: AVAudioFramePosition) {
+            self.file = file; self.buffer = buffer; self.endFrame = endFrame
+        }
     }
     static let blockSeconds = 600.0
     static let overlapSeconds = 10.0
@@ -59,10 +62,18 @@ struct MediaProcessor {
         )
     }
 
-    func makeCaptureMovie(systemAudio: URL, microphone: URL?, destination: URL) async throws {
+    /// A readable track with zero frames means nothing played, unlike an unreadable or damaged file.
+    static func holdsNoAudio(_ url: URL) -> Bool {
+        (try? AVAudioFile(forReading: url).length) == 0
+    }
+
+    func makeCaptureMovie(systemAudio: URL?, microphone: URL?, destination: URL) async throws {
+        guard systemAudio != nil || microphone != nil else { throw MediaError.emptyRecording }
         let composition = AVMutableComposition()
         var parameters: [AVMutableAudioMixInputParameters] = []
-        try await addAudio(systemAudio, to: composition, parameters: &parameters)
+        if let systemAudio {
+            try await addAudio(systemAudio, to: composition, parameters: &parameters)
+        }
         if let microphone {
             try await addAudio(microphone, to: composition, parameters: &parameters)
         }
@@ -117,28 +128,37 @@ struct MediaProcessor {
 
     private func preparePlayback(from capture: URL, in directory: URL, durationLimit: TimeInterval?) async throws
         -> (audio: URL, chunkDirectory: URL, windows: [(start: Double, end: Double)]) {
-        let audio = directory.appending(path: "audio.m4a")
-        if !FileManager.default.fileExists(atPath: audio.path) {
-            try await export(source: capture, destination: audio, range: nil)
-        }
-
-        let asset = AVURLAsset(url: audio)
-        let exportedDuration = try await asset.load(.duration).seconds
+        let (audio, exportedDuration) = try await playbackAudio(from: capture, in: directory)
         let duration = min(exportedDuration, durationLimit ?? exportedDuration)
         guard duration.isFinite, duration > 0 else { throw MediaError.emptyRecording }
 
         let chunkDirectory = directory.appending(path: "chunks", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: chunkDirectory, withIntermediateDirectories: true)
         let blockDuration = try Self.chunkDuration(in: chunkDirectory)
-        var windows: [(start: Double, end: Double)] = []
-        var start = 0.0
-        while start < duration {
-            let end = min(start + blockDuration, duration)
-            windows.append((start, end))
-            if end == duration { break }
-            start = end - Self.overlapSeconds
+        return (audio, chunkDirectory, Self.windows(from: 0, to: duration, blockDuration: blockDuration))
+    }
+
+    /// Exports the archived listening copy once and reports its duration.
+    func playbackAudio(from capture: URL, in directory: URL) async throws -> (audio: URL, duration: Double) {
+        let audio = directory.appending(path: "audio.m4a")
+        if !FileManager.default.fileExists(atPath: audio.path) {
+            try await export(source: capture, destination: audio, range: nil)
         }
-        return (audio, chunkDirectory, windows)
+        let duration = try await AVURLAsset(url: audio).load(.duration).seconds
+        guard duration.isFinite, duration > 0 else { throw MediaError.emptyRecording }
+        return (audio, duration)
+    }
+
+    static func windows(from start: Double, to end: Double, blockDuration: Double = blockSeconds) -> [(start: Double, end: Double)] {
+        var windows: [(start: Double, end: Double)] = []
+        var cursor = start
+        while cursor < end {
+            let windowEnd = min(cursor + blockDuration, end)
+            windows.append((cursor, windowEnd))
+            if windowEnd == end { break }
+            cursor = windowEnd - overlapSeconds
+        }
+        return windows
     }
 
     private func exportChunk(from source: URL, to url: URL, start: Double, end: Double) async throws {
@@ -165,6 +185,25 @@ struct MediaProcessor {
     }
 
     func prepareImportedAudio(parts: [ImportedAudioPart], in directory: URL) async throws -> (audio: URL, chunks: [AudioChunk]) {
+        let audio = try await joinImportedAudio(parts: parts, in: directory)
+        var chunks: [AudioChunk] = []
+        var offset = 0.0
+        for (index, part) in parts.enumerated() {
+            let preparedDirectory = directory.appending(path: "parts/\(index)")
+            try FileManager.default.createDirectory(at: preparedDirectory, withIntermediateDirectories: true)
+            let prepared = try await prepareAudio(
+                from: directory.appending(path: "originals/\(part.fileName)"), in: preparedDirectory, durationLimit: part.duration)
+            chunks += prepared.chunks.map {
+                AudioChunk(url: $0.url, startSeconds: offset + $0.startSeconds,
+                           endSeconds: offset + min($0.endSeconds, part.duration))
+            }
+            offset += part.duration
+        }
+        return (audio, chunks)
+    }
+
+    /// Joins imported files in playback order into the archived listening copy.
+    func joinImportedAudio(parts: [ImportedAudioPart], in directory: URL) async throws -> URL {
         let audio = directory.appending(path: "audio.m4a")
         if !FileManager.default.fileExists(atPath: audio.path) {
             let composition = AVMutableComposition()
@@ -187,20 +226,7 @@ struct MediaProcessor {
             try await exporter.export(to: temporary, as: .m4a)
             try FileManager.default.moveItem(at: temporary, to: audio)
         }
-        var chunks: [AudioChunk] = []
-        var offset = 0.0
-        for (index, part) in parts.enumerated() {
-            let preparedDirectory = directory.appending(path: "parts/\(index)")
-            try FileManager.default.createDirectory(at: preparedDirectory, withIntermediateDirectories: true)
-            let prepared = try await prepareAudio(
-                from: directory.appending(path: "originals/\(part.fileName)"), in: preparedDirectory, durationLimit: part.duration)
-            chunks += prepared.chunks.map {
-                AudioChunk(url: $0.url, startSeconds: offset + $0.startSeconds,
-                           endSeconds: offset + min($0.endSeconds, part.duration))
-            }
-            offset += part.duration
-        }
-        return (audio, chunks)
+        return audio
     }
 
     private func export(source: URL, destination: URL, range: CMTimeRange?, speech: Bool = false) async throws {
@@ -221,30 +247,63 @@ struct MediaProcessor {
 
     /// Upload-only encoding; the listening copy keeps the normal archive export quality.
     static func encodeSpeech(source: URL, destination: URL) throws {
+        try encode(source: source, destination: destination, sampleRate: 24_000, settings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC, AVEncoderBitRateKey: 48_000
+        ])
+    }
+
+    /// Lossless 16 kHz mono upload for speech services; a 70-minute meeting stays near 50 MB.
+    static func encodeFLAC(source: URL, destination: URL, range: (start: Double, end: Double)? = nil) throws {
+        try encode(source: source, destination: destination, sampleRate: 16_000, settings: [
+            AVFormatIDKey: kAudioFormatFLAC
+        ], range: range)
+    }
+
+    static func encodeSilence(seconds: Double, destination: URL) throws {
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(seconds * 16_000)) else {
+            throw MediaError.exportUnavailable
+        }
+        buffer.frameLength = buffer.frameCapacity
+        let output = try AVAudioFile(forWriting: destination, settings: [
+            AVFormatIDKey: kAudioFormatFLAC, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1
+        ])
+        try output.write(from: buffer)
+    }
+
+    private static func encode(source: URL, destination: URL, sampleRate: Double, settings: [String: Any],
+                               range: (start: Double, end: Double)? = nil) throws {
         let input = try AVAudioFile(forReading: source)
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1),
+        let inputRate = input.processingFormat.sampleRate
+        let startFrame = AVAudioFramePosition(max(0, range?.start ?? 0) * inputRate)
+        let endFrame = range.map { min(input.length, AVAudioFramePosition($0.end * inputRate)) } ?? input.length
+        guard startFrame < endFrame else { throw MediaError.emptyRecording }
+        input.framePosition = startFrame
+        // 16-bit samples: encoders such as FLAC take their bit depth from the written format, not from settings.
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate, channels: 1, interleaved: true),
               let converter = AVAudioConverter(from: input.processingFormat, to: format),
               let sourceBuffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 8192),
               let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192) else {
             throw MediaError.exportUnavailable
         }
-        let temporary = destination.deletingLastPathComponent().appending(path: ".speech-\(UUID()).m4a")
+        let temporary = destination.deletingLastPathComponent().appending(path: ".speech-\(UUID()).\(destination.pathExtension)")
         defer { try? FileManager.default.removeItem(at: temporary) }
         do {
-            let output = try AVAudioFile(forWriting: temporary, settings: [
-                AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 24_000,
-                AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 48_000
-            ])
-            let source = ConversionInput(file: input, buffer: sourceBuffer)
+            let output = try AVAudioFile(forWriting: temporary, settings: settings.merging([
+                AVSampleRateKey: sampleRate, AVNumberOfChannelsKey: 1
+            ]) { current, _ in current }, commonFormat: .pcmFormatInt16, interleaved: true)
+            let source = ConversionInput(file: input, buffer: sourceBuffer, endFrame: endFrame)
             while true {
                 try Task.checkCancellation()
                 var error: NSError?
                 let status = converter.convert(to: outputBuffer, error: &error) { requested, state in
-                    guard source.file.framePosition < source.file.length else {
+                    let remaining = source.endFrame - source.file.framePosition
+                    guard remaining > 0 else {
                         state.pointee = .endOfStream; return nil
                     }
                     do {
-                        try source.file.read(into: source.buffer, frameCount: min(requested, source.buffer.frameCapacity))
+                        try source.file.read(into: source.buffer,
+                                             frameCount: min(requested, source.buffer.frameCapacity, AVAudioFrameCount(remaining)))
                         state.pointee = source.buffer.frameLength == 0 ? .endOfStream : .haveData
                         return source.buffer.frameLength == 0 ? nil : source.buffer
                     } catch {

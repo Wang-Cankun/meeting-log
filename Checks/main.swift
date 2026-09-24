@@ -168,14 +168,18 @@ let analysis = MeetingAnalysis(
     decisions: [],
     keyTopics: []
 )
+let sparse = try JSONDecoder().decode(MeetingAnalysis.self, from: Data(#"{"title":"T","actionItems":[{"task":"Send","assignee":"Me"}],"decisions":[{"decision":"Ship"}]}"#.utf8))
+precondition(sparse.actionItems[0].context == "" && sparse.actionItems[0].deadline == "" && sparse.decisions[0].reasoning == "" && sparse.summary.isEmpty,
+             "Omitted optional fields read as empty")
 let markdown = MarkdownRenderer.summary(analysis, startedAt: Date(timeIntervalSince1970: 0))
-precondition(markdown.contains("| Send the draft | — | — | — |"))
+precondition(markdown.contains("## Action items\n\n- Send the draft\n  Owner: — · Deadline: —\n\n## Decisions"), markdown)
+precondition(!markdown.contains("| "), "Summaries use lists, not tables")
 precondition(markdown.contains("## Decisions\n\nNone."))
 
 var specialAnalysis = analysis
 specialAnalysis.actionItems = [.init(assignee: "A | B", task: "Review <draft>\nthen send", deadline: "", context: "R&D")]
 let specialMarkdown = MarkdownRenderer.summary(specialAnalysis, startedAt: Date())
-precondition(specialMarkdown.contains("| Review &lt;draft&gt;<br>then send | A &#124; B | — | R&amp;D |"))
+precondition(specialMarkdown.contains("- Review <draft> then send\n  Owner: A | B · Deadline: —\n  R&D\n"), specialMarkdown)
 specialAnalysis.uncertainties = ["Package name needs confirmation."]
 let uncertainMarkdown = MarkdownRenderer.summary(specialAnalysis, startedAt: Date())
 precondition(uncertainMarkdown.contains("## Needs verification\n\n- Package name needs confirmation."))
@@ -186,6 +190,14 @@ for invalid in ["Commentary\n[19:20] Speaker A: Hello.", "[00:00] Speaker A: Hel
     do {
         _ = try TranscriptResponse.validate(invalid, start: 1160, end: 1460)
         preconditionFailure("Malformed transcript accepted")
+    } catch is TranscriptResponse.ValidationError {}
+}
+let hourTranscript = try TranscriptResponse.validate("[59:58] Speaker A: Before.\n[01:00:04] Speaker B: After.\n[1:02:10] Speaker A: Later.", start: 3540, end: 4140)
+precondition(hourTranscript == "[59:58] Speaker A: Before.\n\n[60:04] Speaker B: After.\n\n[62:10] Speaker A: Later.")
+for invalid in ["[01:60:04] Speaker A: Hello.", "[00:58:30] Speaker A: Too early."] {
+    do {
+        _ = try TranscriptResponse.validate(invalid, start: 3540, end: 4140)
+        preconditionFailure("Malformed hour timestamp accepted")
     } catch is TranscriptResponse.ValidationError {}
 }
 
@@ -216,6 +228,13 @@ let approximateAnalysis = TranscriptEvidence.annotateReferences(evidenceAnalysis
 precondition(approximateAnalysis.actionItems[0].task == evidenceAnalysis.actionItems[0].task)
 precondition(approximateAnalysis.actionItems[0].evidence?[0].verified == false)
 precondition(MarkdownRenderer.summary(approximateAnalysis, startedAt: Date()).contains("[unverified reference]"))
+let spacedTranscript = "# Transcript\n## 00:00–05:00\n[00:01] Speaker A: 我们overlap挺多的，比如说 SPARC 吧。"
+evidenceAnalysis.actionItems[0].evidence = [.init(line: 3, quote: "我们 overlap 挺多的，比如说SPARC吧。")]
+let spacedAnalysis = TranscriptEvidence.annotateReferences(evidenceAnalysis, transcript: spacedTranscript)
+precondition(spacedAnalysis.actionItems[0].evidence?[0].verified == true, "Spacing around mixed-language words is not a mismatch")
+evidenceAnalysis.actionItems[0].evidence = [.init(line: 4, quote: "我们 overlap 挺多的")]
+let shifted = TranscriptEvidence.annotateReferences(evidenceAnalysis, transcript: spacedTranscript).actionItems[0].evidence?[0]
+precondition(shifted?.verified == true && shifted?.line == 3, "A neighboring-line citation is corrected to the quote's line")
 evidenceAnalysis.actionItems[0].evidence = nil
 let missingReferences = TranscriptEvidence.annotateReferences(evidenceAnalysis, transcript: evidenceTranscript)
 precondition(missingReferences.actionItems.count == 1 && !(missingReferences.uncertainties ?? []).isEmpty)
@@ -314,6 +333,7 @@ try await checkConcurrentTranscription()
 try await checkSummaryRegeneration()
 try await checkCapturePreparation()
 try await checkSeparateTrackTranscription()
+try await checkSpeechTranscription()
 checkSummaryMarkdown()
 try await checkInBodyProviderError()
 print("MeetingLog check passed")

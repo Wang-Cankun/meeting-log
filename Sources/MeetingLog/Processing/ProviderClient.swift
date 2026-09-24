@@ -4,7 +4,15 @@ struct ProviderClient: Sendable {
     let baseURL: String
     let apiKey: String
     let model: String
-    var session: URLSession = .shared
+    var session: URLSession = Self.longRequestSession
+
+    /// Providers such as Azure send no bytes until a long completion finishes, so the default 60-second idle limit is too short.
+    static let longRequestSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 900
+        configuration.timeoutIntervalForResource = 1800
+        return URLSession(configuration: configuration)
+    }()
 
     var endpoint: URL {
         get throws {
@@ -35,12 +43,23 @@ struct ProviderClient: Sendable {
         try await send(ChatRequest(
             model: model,
             messages: [.init(role: "user", content: [.text(prompt)])],
-            temperature: 0
+            temperature: 0,
+            // Every text step returns JSON that embeds quoted transcript text; JSON mode keeps its quotes escaped.
+            responseFormat: .init(type: "json_object")
         ))
     }
 
     private func send(_ body: ChatRequest) async throws -> String {
-        try await ProviderRetry.run { try await sendOnce(body) }
+        do {
+            return try await ProviderRetry.run { try await sendOnce(body) }
+        } catch let ProviderError.http(status, message, _) where status == 400 && body.temperature != nil
+                    && message.localizedCaseInsensitiveContains("temperature") {
+            // Some reasoning models accept only their default temperature.
+            var fallback = body
+            fallback.temperature = nil
+            let request = fallback
+            return try await ProviderRetry.run { try await sendOnce(request) }
+        }
     }
 
     private func sendOnce(_ body: ChatRequest) async throws -> String {
@@ -101,9 +120,17 @@ private struct ChatRequest: Encodable, Sendable {
         private enum Keys: String, CodingKey { case type, text; case inputAudio = "input_audio" }
     }
 
+    struct ResponseFormat: Encodable, Sendable { let type: String }
+
     let model: String
     let messages: [Message]
-    let temperature: Double
+    var temperature: Double?
+    var responseFormat: ResponseFormat? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case model, messages, temperature
+        case responseFormat = "response_format"
+    }
 }
 
 private struct ChatResponse: Decodable {

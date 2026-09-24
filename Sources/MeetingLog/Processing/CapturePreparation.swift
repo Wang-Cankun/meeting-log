@@ -3,7 +3,8 @@ import Foundation
 /// Records which raw tracks reached playback before any recoverable source is removed.
 struct CapturePreparation: Codable, Equatable {
     enum State: String, Codable { case preparing, ready }
-    enum Mode: String, Codable { case complete, systemAudioOnly }
+    /// `microphoneOnly` means the computer played nothing, as in an in-person meeting; no audio was lost.
+    enum Mode: String, Codable { case complete, systemAudioOnly, microphoneOnly }
 
     var state: State
     let mode: Mode
@@ -39,7 +40,7 @@ struct CapturePreparation: Codable, Equatable {
     @MainActor
     static func prepare(
         in directory: URL,
-        mix: (URL, URL?, URL) async throws -> Void = { system, microphone, destination in
+        mix: (URL?, URL?, URL) async throws -> Void = { system, microphone, destination in
             try await MediaProcessor().makeCaptureMovie(systemAudio: system, microphone: microphone, destination: destination)
         }
     ) async throws -> Self {
@@ -59,7 +60,9 @@ struct CapturePreparation: Codable, Equatable {
             return receipt
         }
         let hasMicrophone = fm.fileExists(atPath: microphone.path)
-        var receipt = Self(state: .preparing, mode: previous?.mode ?? .complete, reason: previous?.reason)
+        var receipt = hasMicrophone && MediaProcessor.holdsNoAudio(system)
+            ? Self(state: .preparing, mode: .microphoneOnly)
+            : Self(state: .preparing, mode: previous?.mode ?? .complete, reason: previous?.reason)
         try receipt.write(in: directory)
         // Rebuilding media invalidates every cached derivative, including old transcription blocks.
         // Raw tracks and the previous complete capture remain available if rebuilding fails.
@@ -68,9 +71,12 @@ struct CapturePreparation: Codable, Equatable {
             let file = directory.appending(path: name)
             if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
         }
-        if receipt.mode == .systemAudioOnly {
+        switch receipt.mode {
+        case .microphoneOnly:
+            try await mix(nil, microphone, capture)
+        case .systemAudioOnly:
             try await mix(system, nil, capture)
-        } else {
+        case .complete:
             do {
                 try await mix(system, hasMicrophone ? microphone : nil, capture)
             } catch {

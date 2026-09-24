@@ -27,7 +27,7 @@ enum Prompts {
         - \(nameRule)
         - Follow the reference context's spelling and naming preferences for names and terms that the audio supports. If the context marks a term as unresolved, write [uncertain: heard wording] even when it sounds clear.
         - \(speakers)
-        - Timestamps are absolute: add \(clock(start)) to the time within this excerpt. Every timestamp must be at or after \(clock(start)) and strictly before \(clock(ceil(end))); keep them in order.
+        - Timestamps are absolute minutes and seconds: add \(clock(start)) to the time within this excerpt. Past one hour, keep counting minutes (for example, [61:05]); never write hours. Every timestamp must be at or after \(clock(start)) and strictly before \(clock(ceil(end))); keep them in order.
 
         Output only transcript turns, one paragraph per turn, in exactly this form:
         [MM:SS] \(label): Spoken words.
@@ -116,25 +116,34 @@ enum Prompts {
 
 /// Reject malformed output before it becomes a completed, reusable checkpoint.
 enum TranscriptResponse {
+    /// Past the first hour, models sometimes write [HH:MM:SS]; those turns are rewritten as [MM:SS].
     static func validate(_ response: String, start: Double, end: Double) throws -> String {
         let text = response.trimmingCharacters(in: .whitespacesAndNewlines)
-        let pattern = #"^\[(\d{2,}):([0-5]\d)\] ([^:\n]+): (.+)$"#
+        let pattern = #"^\[(?:(\d{1,2}):)?(\d{2,}):([0-5]\d)\] ([^:\n]+): (.+)$"#
         let regex = try NSRegularExpression(pattern: pattern)
         let lines = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !lines.isEmpty else { throw ValidationError() }
         var previous = Int(start)
+        var turns: [String] = []
         for line in lines {
             let ns = line as NSString
             guard let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
-                  let minutes = Int(ns.substring(with: match.range(at: 1))),
+                  let minutes = Int(ns.substring(with: match.range(at: 2))),
                   minutes <= Int.max / 60 - 1,
-                  let seconds = Int(ns.substring(with: match.range(at: 2))) else { throw ValidationError() }
-            let time = minutes * 60 + seconds
+                  let seconds = Int(ns.substring(with: match.range(at: 3))) else { throw ValidationError() }
+            var totalMinutes = minutes
+            if match.range(at: 1).location != NSNotFound {
+                guard minutes < 60, let hours = Int(ns.substring(with: match.range(at: 1))) else { throw ValidationError() }
+                totalMinutes += hours * 60
+            }
+            let time = totalMinutes * 60 + seconds
             guard time >= previous, time >= Int(start), Double(time) < end,
                   !line.contains("```") else { throw ValidationError() }
             previous = time
+            let turn = ns.substring(from: match.range(at: 4).location)
+            turns.append(String(format: "[%02d:%02d] ", totalMinutes, seconds) + turn)
         }
-        return lines.joined(separator: "\n\n")
+        return turns.joined(separator: "\n\n")
     }
 
     struct ValidationError: LocalizedError {

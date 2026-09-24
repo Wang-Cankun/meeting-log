@@ -14,8 +14,9 @@ menu bar panel
   -> pending session directory
   -> system audio + microphone mixdown to compatible capture.mov
   -> compressed audio + optional HEVC video
-  -> ten-minute windows with ten-second overlap, chunked per raw track when both tracks were mixed
-  -> configured OpenAI-compatible provider transcription coverage gate
+  -> with a speech service: one MAI-Transcribe-2 request per recording, file, or raw track
+     otherwise: ten-minute windows with ten-second overlap, chunked per raw track when both tracks were mixed
+  -> transcription coverage gate
   -> evidence-bound summary in the selected project
   -> project/meetings/session archive
 ```
@@ -74,7 +75,7 @@ The import window validates a selected or dropped audio file with AVFoundation, 
 
 Multi-file imports commit all source copies as one pending session. Ordered originals live in `originals/`, named by index to avoid filename collisions; `sources.json` preserves original names, order, and durations and stays in the final archive. The manifest also retains source metadata for recovery. Preparation concatenates playback audio but chunks each original independently, so overlap never crosses a source boundary. The transcript labels each recording and states that playback order does not establish continuous conversation or real-world chronology. The user chooses one reference date and project for the complete group; all blocks must succeed before a single summary is archived.
 
-Transcription uses a bounded pool of three concurrent block requests within the active meeting. Results are checkpointed serially as each completes and assembled in source/time order. After a terminal block failure, the pool stops scheduling new work and drains in-flight requests so successful results remain recoverable; retry resumes only incomplete blocks. The meeting queue remains serial, and summary generation starts only after complete coverage. Provider calls make at most three attempts for rate limits, temporary server errors, and transient network failures, with exponential backoff and `Retry-After` support. A 200 response whose body carries an upstream error, or that contains no text, is retried like a temporary server failure. Authentication and other permanent request failures are not automatically retried.
+Transcription uses a bounded pool of concurrent block requests within the active meeting: eight for chat-model windows, three for speech-service uploads. Results are checkpointed serially as each completes and assembled in source/time order. After a terminal block failure, the pool stops scheduling new work and drains in-flight requests so successful results remain recoverable; retry resumes only incomplete blocks. The meeting queue remains serial, and summary generation starts only after complete coverage. Provider calls make at most three attempts for rate limits, temporary server errors, and transient network failures, with exponential backoff and `Retry-After` support. A 200 response whose body carries an upstream error, or that contains no text, is retried like a temporary server failure. Authentication and other permanent request failures are not automatically retried.
 
 ## Speaker attribution from raw tracks
 
@@ -84,11 +85,15 @@ Transcripts keep the spoken language. Rendering converts Traditional Chinese cha
 
 Imports, system-only recoveries, legacy combined captures, and sessions whose saved coverage has no track field keep single mixed-audio transcription.
 
+## Speech-service transcription
+
+When Settings holds an Azure Speech endpoint and key, `SpeechTranscriber` replaces chat-model transcription and the provider handles text steps only. Each section (the whole recording, each imported file, or each raw track of a complete capture) is encoded to 16 kHz mono 16-bit FLAC and sent as one fast-transcription request with MAI-Transcribe-2 in clean style, diarization on (off for the microphone track, which stays `Me`), and a phrase list of names and terms from the project and global context, most specific first. Diarized phrases become `[MM:SS] Speaker X:` turns locally and pass the same timestamp validation as model output. A response whose phrases share one offset, or run past the section, lost its timing and is rejected. A section over fifteen minutes that fails for any reason other than authentication or cancellation is split into the standard overlapping ten-minute windows and retried; finished sections are kept. Azure reports a slow upload as a 400 form error, which is retried as a timeout. The readable transcript comes from local rules instead of an LLM pass (see decisions).
+
 ## Readable transcript and bilingual summaries
 
 Upload chunks are mono AAC at 24 kHz and 48 kbps; the archive playback copy retains the normal Apple M4A export quality. Raw capture CAF files never enter provider requests. New chunks are speech-encoded before upload; existing cached chunks retain their previous encoding on retry.
 
-Completed block output is retained as `transcript_raw.md`. One text-only request edits the complete merged transcript into `transcript.md`, removing empty fillers and clear overlap duplicates while preserving recording/excerpt boundaries, timestamps, uncertainty and conversation. Structural rejection falls back to the raw transcript with a note; transport failure leaves the job recoverable. The source remains available for checking any editorial error.
+Completed block output is retained as `transcript_raw.md`. With a speech service, `TranscriptPolisher.tidy` derives `transcript.md` locally without rewording. Otherwise one text-only request edits the complete merged transcript into `transcript.md`, removing empty fillers and clear overlap duplicates while preserving recording/excerpt boundaries, timestamps, uncertainty and conversation. Structural rejection falls back to the raw transcript with a note; transport failure leaves the job recoverable. The source remains available for checking any editorial error.
 
 `SummaryEvidence` supplies the original transcription to both summary requests and reference checks. Cleanup output is never the authority for a new summary. Original and Chinese summaries label the evidence filename, and provenance stores it. Regeneration snapshots both transcript files, including absence; only missing raw transcription permits an explicitly labeled legacy fallback. Existing but empty or unreadable raw transcription blocks generation. Adding, editing, or deleting either source after generation blocks saving.
 

@@ -31,6 +31,10 @@ final class AppModel: ObservableObject {
     @Published var providerStatus: String?
     @Published var isVerifyingProvider = false
     @Published var selectedModelID = UserDefaults.standard.string(forKey: "providerModel") ?? "google/gemini-3.8-flash"
+    @Published var speechEndpoint = UserDefaults.standard.string(forKey: "speechEndpoint") ?? ""
+    @Published var speechKey = UserDefaults.standard.string(forKey: "speechAPIKey") ?? ""
+    @Published var speechStatus: String?
+    @Published var isVerifyingSpeech = false
     @Published var archiveRootPath = UserDefaults.standard.string(forKey: ArchiveStore.rootDefaultsKey) ?? AppModel.defaultArchiveURL.path
     @Published var applications: [CaptureApplication] = []
     @Published var selectedSystemAudioBundleID: String?
@@ -184,6 +188,40 @@ final class AppModel: ObservableObject {
         } catch {
             providerStatus = error.localizedDescription
         }
+    }
+
+    /// Optional speech service; without it the provider model transcribes audio.
+    var speechTranscriber: SpeechTranscriber? {
+        speechEndpoint.isEmpty || speechKey.isEmpty ? nil : SpeechTranscriber(endpoint: speechEndpoint, apiKey: speechKey)
+    }
+
+    func testSpeechConfiguration(endpoint: String, key: String) async {
+        guard !isVerifyingSpeech else { return }
+        let endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !endpoint.isEmpty, !key.isEmpty else {
+            speechStatus = "Complete both speech fields."
+            return
+        }
+        isVerifyingSpeech = true
+        defer { isVerifyingSpeech = false }
+        do {
+            try await SpeechTranscriber(endpoint: endpoint, apiKey: key).verifyConfiguration()
+            speechEndpoint = endpoint
+            speechKey = key
+            UserDefaults.standard.set(endpoint, forKey: "speechEndpoint")
+            UserDefaults.standard.set(key, forKey: "speechAPIKey")
+            speechStatus = "Connected"
+        } catch {
+            speechStatus = error.localizedDescription
+        }
+    }
+
+    func removeSpeechConfiguration() {
+        speechEndpoint = ""
+        speechKey = ""
+        speechStatus = "Speech service removed"
+        for key in ["speechEndpoint", "speechAPIKey"] { UserDefaults.standard.removeObject(forKey: key) }
     }
 
     func removeProviderConfiguration() {
@@ -618,7 +656,7 @@ final class AppModel: ObservableObject {
         if keySaved, !selectedModelID.isEmpty {
             enqueue(ProcessingJob(directory: directory, manifest: manifest, store: store,
                                   baseURL: providerBaseURL, key: apiKey, model: selectedModelID,
-                                  projectName: manifest.projectName))
+                                  speech: speechTranscriber, projectName: manifest.projectName))
         }
     }
 
@@ -674,6 +712,7 @@ final class AppModel: ObservableObject {
                 baseURL: providerBaseURL,
                 key: apiKey,
                 model: selectedModelID,
+                speech: speechTranscriber,
                 projectName: manifest.projectName ?? selectedProjectName
             ))
         }
@@ -727,7 +766,8 @@ final class AppModel: ObservableObject {
                 baseURL: job.baseURL,
                 apiKey: job.key,
                 model: job.model
-            )
+            ),
+            speech: job.speech
         ) { [weak self] text in
             Task { @MainActor in self?.processingText = text }
         }
@@ -841,6 +881,7 @@ private struct ProcessingJob {
     let baseURL: String
     let key: String
     let model: String
+    var speech: SpeechTranscriber? = nil
     let projectName: String?
 }
 

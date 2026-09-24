@@ -34,6 +34,24 @@ func checkCapturePreparation() async throws {
         preconditionFailure("Ready receipt must reuse its complete output")
     }
 
+    // In-person meeting: the computer played nothing, so the system track is valid but empty.
+    // A receipt left by the old system-only fallback must not block microphone recovery.
+    let inPerson = root.appending(path: "in-person")
+    try fm.createDirectory(at: inPerson, withIntermediateDirectories: true)
+    _ = try AVAudioFile(forWriting: inPerson.appending(path: "system-audio.caf"), settings: format.settings)
+    do {
+        let file = try AVAudioFile(forWriting: inPerson.appending(path: "microphone.m4a"), settings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 24_000, AVNumberOfChannelsKey: 1
+        ])
+        try file.write(from: buffer)
+    }
+    try CapturePreparation(state: .preparing, mode: .systemAudioOnly, reason: "The recording contains no audio.")
+        .write(in: inPerson)
+    let microphoneOnly = try await CapturePreparation.prepare(in: inPerson)
+    precondition(microphoneOnly.state == .ready && microphoneOnly.mode == .microphoneOnly && microphoneOnly.warning == nil)
+    let inPersonDuration = try await AVURLAsset(url: inPerson.appending(path: "capture.mov")).load(.duration).seconds
+    precondition(inPersonDuration > 0.9)
+
     // Crash after publishing fallback but before ready: next attempt must rebuild, not trust that movie.
     let interrupted = root.appending(path: "interrupted")
     try fm.createDirectory(at: interrupted, withIntermediateDirectories: true)

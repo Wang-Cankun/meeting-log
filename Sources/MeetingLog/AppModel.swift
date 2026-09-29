@@ -98,13 +98,17 @@ final class AppModel: ObservableObject {
 
     private static let projectDefaultsKey = "selectedProjectName"
 
-    init() {
+    /// `startsServices` is false only for the debug window renderer, which reads the archive without
+    /// persisting settings, creating folders, enumerating capture sources or resuming pending sessions.
+    init(startsServices: Bool = true) {
         keySaved = !apiKey.isEmpty
-        UserDefaults.standard.set(archiveRootPath, forKey: ArchiveStore.rootDefaultsKey)
-        try? FileManager.default.createDirectory(
-            at: URL(filePath: archiveRootPath, directoryHint: .isDirectory),
-            withIntermediateDirectories: true
-        )
+        if startsServices {
+            UserDefaults.standard.set(archiveRootPath, forKey: ArchiveStore.rootDefaultsKey)
+            try? FileManager.default.createDirectory(
+                at: URL(filePath: archiveRootPath, directoryHint: .isDirectory),
+                withIntermediateDirectories: true
+            )
+        }
         refreshArchive()
         capture.onScreenSelection = { [weak self] source in
             self?.selectedScreenSource = source
@@ -117,6 +121,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.observeMicrophoneSignal(decibels, at: time) }
         }
         capture.onSystemAudioLevel = { [weak self] in self?.audioLevels.setSystem($0) }
+        guard startsServices else { return }
         Task {
             refreshApplications()
             await resumePendingSessions()

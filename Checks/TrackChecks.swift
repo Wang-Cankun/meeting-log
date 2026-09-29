@@ -153,9 +153,9 @@ func checkSummaryMarkdown() {
         .detail(text: "Evidence: L12: “We agree.”", depth: 0),
         .bullet(marker: "1.", text: "First", depth: 0),
     ], "\(blocks)")
-    let links = SummaryMarkdown.inline("Evidence: L12: “HLA2 L3”, see URL1").runs.compactMap(\.link)
-    precondition(links.compactMap(SummaryMarkdown.line(from:)) == [12, 3], "\(links)")
-    print("Summary Markdown passed: tables, continuation lines, numbered lists and reference links")
+    let marks = SummaryInline.references(inMarkdown: "Evidence: L12: “HLA2 L3”, see URL1 and L4")
+    precondition(marks.map(\.line) == [12, 4], "Quoted words and identifiers are not references: \(marks)")
+    print("Summary Markdown passed: tables, continuation lines, numbered lists and references")
 }
 
 /// A 200 response whose body carries an upstream error must retry, not fail as undecodable data.

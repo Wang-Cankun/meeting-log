@@ -415,6 +415,7 @@ try await checkCapturePreparation()
 try await checkSeparateTrackTranscription()
 try await checkSpeechTranscription()
 checkSummaryMarkdown()
+checkSummaryDocument()
 try await checkInBodyProviderError()
 print("MeetingLog check passed")
 

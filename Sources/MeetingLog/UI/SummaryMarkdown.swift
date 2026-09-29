@@ -1,7 +1,7 @@
 import Foundation
 
 /// Block parser for the Markdown MeetingLog writes and users may edit in Obsidian.
-/// Evidence references such as `L12` become links that open the transcript at that line.
+/// `SummaryDocument` builds typed sections from these blocks; anything else renders block by block.
 enum SummaryMarkdown: Equatable {
     case heading(level: Int, text: String)
     case bullet(marker: String, text: String, depth: Int)
@@ -10,8 +10,6 @@ enum SummaryMarkdown: Equatable {
     case table(header: [String], rows: [[String]])
     case paragraph(String)
     case rule
-
-    static let lineScheme = "meetinglog-line"
 
     static func parse(_ markdown: String) -> [SummaryMarkdown] {
         let lines = markdown.components(separatedBy: .newlines)
@@ -52,21 +50,6 @@ enum SummaryMarkdown: Equatable {
         }
         return blocks
     }
-
-    static func inline(_ text: String) -> AttributedString {
-        let ns = text as NSString
-        let linked = referencePattern.stringByReplacingMatches(
-            in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "[L$1](\(lineScheme):$1)")
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: linked, options: options)) ?? AttributedString(text)
-    }
-
-    static func line(from url: URL) -> Int? {
-        guard url.scheme == lineScheme else { return nil }
-        return Int(url.absoluteString.dropFirst(lineScheme.count + 1))
-    }
-
-    private static let referencePattern = try! NSRegularExpression(pattern: #"(?<![\p{L}\p{N}_\[])L(\d+)\b"#)
 
     private static func headingLevel(_ line: String) -> Int? {
         let level = line.prefix { $0 == "#" }.count

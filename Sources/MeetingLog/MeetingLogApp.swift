@@ -1,6 +1,15 @@
 import SwiftUI
 
 @main
+enum MeetingLogMain {
+    @MainActor static func main() {
+        #if DEBUG
+        if SummariesRender.runIfRequested() { return }
+        #endif
+        MeetingLogApp.main()
+    }
+}
+
 struct MeetingLogApp: App {
     @StateObject private var model = AppModel()
 
@@ -23,9 +32,9 @@ struct MeetingLogApp: App {
         .defaultLaunchBehavior(.suppressed)
 
         Window("Meeting summaries", id: "meeting-summaries") {
-            SummaryReviewView(model: model)
+            SummariesView(model: model)
         }
-        .defaultSize(width: 1000, height: 720)
+        .defaultSize(width: 1280, height: 820)
         .defaultLaunchBehavior(.suppressed)
 
         Window("Move meeting", id: "move-meeting") {

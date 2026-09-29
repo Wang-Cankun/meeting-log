@@ -38,11 +38,11 @@ Transcription submits up to three audio blocks concurrently, saves completed res
 
 ### Regenerate a saved summary
 
-In **All meetings**, click **Transcript** or any `L` reference in a summary to open the transcript beside it at that line; click a timestamp to play the recording from there.
+**All meetings** opens Meeting summaries: pick a project in the sidebar, search titles and summaries, and select a meeting. Click any `L` reference in a summary to see the quoted transcript line, then **Play from** it or **Show in transcript**; click a timestamp in the transcript to play the recording from there.
 
-To regenerate, choose **All meetings**, or **Regenerate summary…** in a recent meeting's menu. Select a meeting, update its project context if needed, and generate. The app uses the saved transcript, uploads no audio, and shows the current and proposed Markdown side by side. Choose **Save new summary** to replace it with a backup, or **Discard preview** to keep the original. Previous versions and generation provenance live in the meeting's hidden `.summary-history` folder.
+To regenerate, choose **Regenerate** in Meeting summaries, or **Regenerate summary…** in a recent meeting's menu. Update the project context if needed, then generate. The app uses the saved transcript, uploads no audio, and shows the current and proposed Markdown side by side. Choose **Save new summary** to replace it with a backup, or **Discard preview** to keep the original. Previous versions and generation provenance live in the meeting's hidden `.summary-history` folder.
 
-The **Files** menu in All meetings also offers **Move to project…**, including for older meetings. Moving remains disabled during processing or an unsaved summary preview.
+The **More** menu in Meeting summaries also offers **Move to project…**, including for older meetings. Moving remains disabled during processing or an unsaved summary preview.
 
 ## Meeting files
 

@@ -33,7 +33,7 @@ struct SourcesCard: View {
     private var locked: Bool { model.isCaptureBusy || model.isChangingRecording }
 
     private var systemAudioLabel: String {
-        model.selectedSystemAudioBundleID == nil ? "All apps" : model.selectedSystemAudioName
+        SourceNames.macAudio(applicationName: model.selectedSystemAudioBundleID == nil ? nil : model.selectedSystemAudioName)
     }
 
     private var microphoneBlocked: Bool {
@@ -57,8 +57,8 @@ struct SourcesCard: View {
                 if !sourcesNeedAttention {
                     Button { sourcesExpanded = false } label: {
                         Image(systemName: "chevron.up")
-                            .font(.caption.weight(.semibold))
-                            .frame(width: 20, height: 16)
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 24, height: 24)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
@@ -70,6 +70,7 @@ struct SourcesCard: View {
             .padding(.leading, PanelMetrics.rowInset)
             .padding(.trailing, 10)
             .padding(.top, 10)
+            .padding(.bottom, -4)
 
             systemAudioRow
             Divider().padding(.leading, PanelMetrics.contentLeading)
@@ -83,7 +84,7 @@ struct SourcesCard: View {
         SourceRow(icon: "speaker.wave.2.fill", name: "Mac audio", status: model.systemAudioStateText,
                   statusColor: model.systemAudioError != nil || !model.selectedSystemAudioIsAvailable ? .orange : .secondary) {
             Text("Always")
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .help("Mac audio is always recorded")
         } details: {
@@ -232,22 +233,29 @@ struct SourcesCard: View {
 
     private var collapsed: some View {
         Button { sourcesExpanded = true } label: {
-            HStack(spacing: 12) {
-                // Equal priority and a minimum name width, so no source, video included, truncates away.
-                MiniSource(icon: "speaker.wave.2.fill", name: systemAudioLabel, level: systemAudioLevel)
+            HStack(spacing: 0) {
+                // Short names and fixed-width meters keep the common cases on one line without truncation;
+                // video takes only an icon so the two audio names get the room. With equal priority the
+                // shorter name is sized first, so only a long name truncates.
+                MiniSource(icon: "speaker.wave.2.fill", name: systemAudioLabel, level: systemAudioLevel ?? 0)
+                    .opacity(systemAudioLevel == nil ? 0.6 : 1)
+                    .layoutPriority(1)
+                    .padding(.trailing, 14)
                 MiniSource(icon: model.microphoneEnabled ? "mic.fill" : "mic.slash",
-                           name: model.microphoneEnabled ? model.selectedMicrophoneLabel : "No mic",
+                           name: model.microphoneEnabled ? SourceNames.microphone(model.selectedMicrophoneName) : "No mic",
                            level: model.microphoneEnabled ? audioLevels.microphone : nil)
-                MiniSource(icon: model.videoEnabled ? "rectangle.on.rectangle" : "rectangle.on.rectangle.slash",
-                           name: model.videoEnabled ? model.selectedScreenSource ?? "Screen" : "No video",
-                           level: nil, showsMeter: false)
-                Spacer(minLength: 4)
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                videoState
+                    .padding(.trailing, 6)
                 Image(systemName: "chevron.down")
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, PanelMetrics.rowInset)
-            .padding(.vertical, 12)
+            .padding(.leading, PanelMetrics.rowInset)
+            .padding(.trailing, 12)
+            .padding(.vertical, 11)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -255,6 +263,16 @@ struct SourcesCard: View {
         .accessibilityLabel("Sources: \(sourceSummaryText)")
         .accessibilityValue(levelSummaryText)
         .accessibilityHint("Shows source settings")
+    }
+
+    /// Icon only: "No video" lives in the help tag and the row's VoiceOver label.
+    private var videoState: some View {
+        Image(systemName: model.videoEnabled ? "rectangle.inset.filled.on.rectangle" : "rectangle.on.rectangle.slash")
+            .font(.system(size: 13))
+            .foregroundStyle(model.videoEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+            .frame(width: 18)
+            .help(model.videoEnabled ? "Screen video: \(model.selectedScreenSource ?? "on")" : "No video")
+            .accessibilityLabel(model.videoEnabled ? "Screen video on" : "No video")
     }
 
     private var systemAudioLevel: Float? {

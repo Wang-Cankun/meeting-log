@@ -21,7 +21,7 @@ struct ControlPanel: View {
             }
         }
         .foregroundStyle(.primary)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(PanelColors.background)
         .frame(width: 400)
         .animation(.snappy(duration: 0.25), value: phaseKind)
         .onAppear { model.panelDidOpen() }
@@ -47,7 +47,7 @@ struct ControlPanel: View {
                 ProjectChooser(projects: model.projects, selection: Binding(
                     get: { model.selectedProjectName ?? ArchiveStore.inboxName },
                     set: { model.selectProject($0) }
-                ), refresh: model.refreshArchive)
+                ), refresh: model.refreshArchive, style: .card)
                 .frame(maxWidth: .infinity)
                 .disabled(!model.canSelectRecordingProject)
                 .help(model.canSelectRecordingProject ? "Choose where to save the next recording" : "This recording's destination is fixed until recording stops")
@@ -56,22 +56,15 @@ struct ControlPanel: View {
             .padding(.top, 14)
 
             Button { model.toggleRecording() } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "record.circle.fill")
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.red, .white)
-                    Text("Start recording")
-                }
-                .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity)
+                PanelActionLabel(title: "Start recording", systemImage: "record.circle.fill", iconStyle: AnyShapeStyle(.red))
             }
             .buttonStyle(.borderedProminent)
-            .controlSize(.extraLarge)
+            .panelActionStyle()
             .disabled(model.isChangingRecording || !model.canStartRecording)
             .help(model.canStartRecording ? "Start recording to the selected project" : model.statusText)
             .padding(.horizontal, PanelMetrics.cardInset)
             .padding(.top, 12)
-            .padding(.bottom, 12)
+            .padding(.bottom, 16)
 
             feedback
             Divider()
@@ -84,7 +77,7 @@ struct ControlPanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Group {
                 if isFailed {
                     Image(systemName: "exclamationmark.triangle")
@@ -94,13 +87,14 @@ struct ControlPanel: View {
                     MeetingMark().fill(.tint).frame(width: 28, height: 22)
                 }
             }
-            .frame(width: 30)
+            .frame(width: 28)
+            .padding(.trailing, 4)
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("MeetingLog").font(.headline)
+                Text("MeetingLog").font(.title3.weight(.semibold))
                 Text(model.phase == .idle && model.canStartRecording ? "Ready to record" : model.statusText)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(isFailed ? .orange : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -112,19 +106,18 @@ struct ControlPanel: View {
                 openWindow(id: "import-audio")
                 NSApplication.shared.activate(ignoringOtherApps: true)
             } label: {
-                Image(systemName: "square.and.arrow.down")
-                    .frame(width: PanelMetrics.iconButton, height: PanelMetrics.iconButton)
-                    .contentShape(Rectangle())
+                PanelIconLabel(systemName: "square.and.arrow.down")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .help("Import a recording from your iPhone or Mac")
             .accessibilityLabel("Import audio")
 
             PanelMoreMenu(showSettings: showSettings)
         }
         .padding(.leading, PanelMetrics.textLeading)
-        .padding(.trailing, 12)
-        .padding(.vertical, 14)
+        .padding(.trailing, PanelMetrics.cardInset)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
     }
 
     @ViewBuilder private var feedback: some View {
@@ -154,7 +147,7 @@ struct ControlPanel: View {
                 .controlSize(.small)
                 .accessibilityLabel("Dismiss")
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, PanelMetrics.textLeading)
         .padding(.bottom, 10)
         .task(id: notice.id) {
             guard !notice.isError else { return }
@@ -177,7 +170,7 @@ struct ControlPanel: View {
             }
             .controlSize(.small)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, PanelMetrics.textLeading)
         .padding(.bottom, 10)
     }
 

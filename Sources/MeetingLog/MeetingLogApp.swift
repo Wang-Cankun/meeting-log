@@ -4,7 +4,7 @@ import SwiftUI
 enum MeetingLogMain {
     @MainActor static func main() {
         #if DEBUG
-        if SummariesRender.runIfRequested() { return }
+        if SummariesRender.runIfRequested() || PanelRender.runIfRequested() { return }
         #endif
         MeetingLogApp.main()
     }

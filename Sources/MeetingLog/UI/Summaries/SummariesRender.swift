@@ -206,7 +206,7 @@ enum SummariesRender {
     }
 
     /// `background` fills behind a view that has none of its own, such as a scroll view's document or a popover.
-    private static func write(_ view: NSView, to url: URL, background: NSColor? = nil) throws {
+    static func write(_ view: NSView, to url: URL, background: NSColor? = nil) throws {
         var bitmap = try snapshot(view)
         if let background,
            let canvas = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: bitmap.pixelsWide, pixelsHigh: bitmap.pixelsHigh,

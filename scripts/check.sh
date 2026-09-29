@@ -25,6 +25,8 @@ swiftc \
   "$repo_dir/Sources/MeetingLog/UI/Summaries/SummaryDocument.swift" \
   "$repo_dir/Sources/MeetingLog/UI/Summaries/TranscriptDocument.swift" \
   "$repo_dir/Sources/MeetingLog/UI/Summaries/MeetingLibrary.swift" \
+  "$repo_dir/Sources/MeetingLog/UI/Panel/SourceNames.swift" \
+  "$repo_dir/Checks/PanelChecks.swift" \
   "$repo_dir/Checks/SummaryChecks.swift" \
   "$repo_dir/Checks/SummaryDocumentChecks.swift" \
   "$repo_dir/Checks/ConcurrencyChecks.swift" \

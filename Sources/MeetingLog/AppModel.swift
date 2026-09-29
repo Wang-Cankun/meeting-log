@@ -97,10 +97,13 @@ final class AppModel: ObservableObject {
     private(set) var silenceNotificationCount = 0
 
     private static let projectDefaultsKey = "selectedProjectName"
+    /// False only for the debug renderers: nothing previews, enumerates sources or rereads the archive.
+    private let startsServices: Bool
 
     /// `startsServices` is false only for the debug window renderer, which reads the archive without
     /// persisting settings, creating folders, enumerating capture sources or resuming pending sessions.
     init(startsServices: Bool = true) {
+        self.startsServices = startsServices
         keySaved = !apiKey.isEmpty
         if startsServices {
             UserDefaults.standard.set(archiveRootPath, forKey: ArchiveStore.rootDefaultsKey)
@@ -328,6 +331,7 @@ final class AppModel: ObservableObject {
 
     func panelDidOpen() {
         isPanelOpen = true
+        guard startsServices else { return }
         refreshArchive()
         refreshApplications()
         schedulePreviewStart()
@@ -335,7 +339,7 @@ final class AppModel: ObservableObject {
 
     func panelDidClose() {
         isPanelOpen = false
-        guard !isCaptureBusy else { return }
+        guard startsServices, !isCaptureBusy else { return }
         schedulePreviewStop()
     }
 
@@ -1096,3 +1100,35 @@ struct MeetingMove: Equatable {
     let source: URL
     let destination: URL
 }
+
+#if DEBUG
+/// Debug renderer only: injects fixture state that normally comes from capture, processing and the archive.
+extension AudioLevels {
+    func debugSet(system: Float, microphone: Float) {
+        self.system = system
+        self.microphone = microphone
+    }
+}
+
+extension AppModel {
+    func debugSetPanelState(
+        projects: [ProjectFolder],
+        recentMeetings: [ArchivedMeeting],
+        pendingItems: [PendingMeetingItem] = [],
+        processingProgress: ProcessingProgress? = nil,
+        recordingDestinationPath: String? = nil,
+        recordingMicrophoneName: String? = nil,
+        microphoneSilenceWarning: String? = nil
+    ) {
+        self.projects = projects
+        self.recentMeetings = recentMeetings
+        self.pendingItems = pendingItems
+        self.processingProgress = processingProgress
+        self.processingCount = processingProgress == nil ? 0 : 1
+        self.recordingDestinationPath = recordingDestinationPath
+        self.recordingIncludesMicrophone = recordingMicrophoneName != nil
+        self.recordingMicrophoneName = recordingMicrophoneName
+        self.microphoneSilenceWarning = microphoneSilenceWarning
+    }
+}
+#endif

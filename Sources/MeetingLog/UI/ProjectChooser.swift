@@ -2,9 +2,13 @@ import SwiftUI
 
 /// One destination control for the recording panel and import window.
 struct ProjectChooser: View {
+    /// `field` is a compact bordered button for forms; `card` is the panel's full-width card with a folder icon.
+    enum Style { case field, card }
+
     let projects: [ProjectFolder]
     @Binding var selection: String
     var refresh: () -> Void = {}
+    var style: Style = .field
     @State private var presented = false
     @State private var query = ""
     @State private var collapsed: Set<String> = []
@@ -24,8 +28,11 @@ struct ProjectChooser: View {
         let visible = projects.filter { $0.name != ArchiveStore.inboxName }
         if !query.isEmpty {
             return ([Row(id: "Inbox", project: nil, title: "Inbox", depth: 0, group: false)]
-                + visible.map { Row(id: $0.name, project: $0, title: $0.displayName, depth: 0, group: false) })
-                .filter { ($0.project?.displayPath ?? $0.title).localizedStandardContains(query) }
+                + visible.map { Row(id: $0.name, project: $0, title: MeetingLibrary.displayName($0.displayName), depth: 0, group: false) })
+                .filter { row in
+                    let path = row.project?.displayPath ?? row.title
+                    return path.localizedStandardContains(query) || MeetingLibrary.displayName(path).localizedStandardContains(query)
+                }
         }
         var result = [Row(id: "Inbox", project: nil, title: "Inbox", depth: 0, group: false)]
         func children(of parent: ProjectFolder?, depth: Int) {
@@ -35,7 +42,7 @@ struct ProjectChooser: View {
                 guard nearest?.name == parent?.name else { continue }
                 let group = visible.contains { $0.name.hasPrefix(project.name + "/") }
                 result.append(Row(id: group ? "group:" + project.name : project.name,
-                                  project: project, title: project.displayName, depth: depth, group: group))
+                                  project: project, title: MeetingLibrary.displayName(project.displayName), depth: depth, group: group))
                 if group, !collapsed.contains(project.name) {
                     result.append(Row(id: project.name, project: project, title: "General meetings", depth: depth + 1, group: false))
                     children(of: project, depth: depth + 1)
@@ -49,26 +56,71 @@ struct ProjectChooser: View {
         let row = rows.first { $0.id == highlighted }
         return (row?.project?.name ?? (row == nil ? selection : "Inbox")) + "/meetings"
     }
+    private var title: String {
+        selected.map { MeetingLibrary.displayName($0.displayName) } ?? (missing ? "Choose a new location" : "Inbox")
+    }
+    private var caption: String? {
+        if missing { return selection }
+        guard let parent = selected?.parentDisplay, !parent.isEmpty else { return nil }
+        return MeetingLibrary.displayName(parent)
+    }
+
     var body: some View {
-        Button {
-            refresh(); query = ""; highlighted = nil; presented = true
-        } label: {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(selected?.displayName ?? (missing ? "Choose a new location" : "Inbox"))
-                        .foregroundStyle(missing ? Color.orange : Color.primary)
-                    if let parent = selected?.parentDisplay, !parent.isEmpty {
-                        Text(parent).font(.caption).foregroundStyle(.secondary)
+        Group {
+            switch style {
+            case .field:
+                Button(action: open) {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(title).foregroundStyle(missing ? Color.orange : Color.primary)
+                            if let caption { Text(caption).font(.caption).foregroundStyle(.secondary) }
+                        }.multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 2)
+                        Image(systemName: missing ? "exclamationmark.folder" : "chevron.up.chevron.down").font(.caption)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+            case .card:
+                Button(action: open) {
+                    HStack(spacing: 10) {
+                        Image(systemName: missing ? "exclamationmark.folder" : "folder")
+                            .font(.system(size: 15))
+                            .foregroundStyle(missing ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.tint))
+                            .frame(width: 20)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(title)
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(missing ? Color.orange : Color.primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            if let caption {
+                                Text(caption)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
                     }
-                    if missing { Text(selection).font(.caption).foregroundStyle(.secondary) }
-                }.multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 2)
-                Image(systemName: missing ? "exclamationmark.folder" : "chevron.up.chevron.down").font(.caption)
-            }.frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(ProjectCardStyle())
+                .focusEffectDisabled()
+                .help(selected.map { MeetingLibrary.displayName($0.displayPath) } ?? selection)
+            }
         }
-        .buttonStyle(.bordered).controlSize(.small)
-        .accessibilityLabel("Save meeting to \(selected?.displayPath ?? selection)")
+        .accessibilityLabel("Save meeting to \(selected.map { MeetingLibrary.displayName($0.displayPath) } ?? selection)")
         .popover(isPresented: $presented, arrowEdge: .bottom) { panel }
+    }
+
+    private func open() {
+        refresh(); query = ""; highlighted = nil; presented = true
     }
 
     var panel: some View {
@@ -134,6 +186,38 @@ struct ProjectChooser: View {
             if collapsed.contains(project.name) { collapsed.remove(project.name) } else { collapsed.insert(project.name) }
             highlighted = row.id
         } else { selection = row.id; presented = false }
+    }
+}
+
+/// The panel's destination card: card fill, hairline border and a pressed tint, with its own focus ring.
+private struct ProjectCardStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        CardBody(configuration: configuration)
+    }
+
+    private struct CardBody: View {
+        let configuration: Configuration
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .padding(.leading, 12)
+                .padding(.trailing, 12)
+                .padding(.vertical, 8)
+                .frame(minHeight: 46)
+                .background(RoundedRectangle(cornerRadius: 10).fill(PanelColors.card))
+                .overlay(RoundedRectangle(cornerRadius: 10).fill(configuration.isPressed ? PanelColors.hover : .clear))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PanelColors.border))
+                .overlay {
+                    if isFocused {
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 2)
+                    }
+                }
+                .opacity(isEnabled ? 1 : 0.6)
+                .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
     }
 }
 

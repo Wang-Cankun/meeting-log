@@ -18,52 +18,48 @@ struct RecordingStatusView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
                     Circle().fill(.red).frame(width: 8, height: 8)
                     Text("RECORDING")
-                        .font(.caption.weight(.semibold))
+                        .font(.callout.weight(.semibold))
+                        .tracking(0.2)
                         .foregroundStyle(.red)
                     Spacer()
                     PanelMoreMenu(showSettings: showSettings)
+                        .padding(.vertical, -6)
                 }
                 Text(startedAt, style: .timer)
                     .font(.system(size: timerSize, weight: .semibold).monospacedDigit())
+                    .tracking(-0.5)
                     .accessibilityLabel("Elapsed time")
                     .accessibilityValue(Text(startedAt, style: .timer))
-                Label("Saving to \(model.recordingDestinationPath ?? ArchiveStore.inboxName)", systemImage: "folder")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(model.recordingDestinationPath ?? ArchiveStore.inboxName)
+                PanelDestination(prefix: "Saving to", path: model.recordingDestinationPath)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, PanelMetrics.textLeading)
-            .padding(.trailing, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 14)
+            .padding(.trailing, PanelMetrics.cardInset)
+            .padding(.top, 16)
+            .padding(.bottom, 18)
 
             tracks
                 .padding(.horizontal, PanelMetrics.cardInset)
 
             Button { model.toggleRecording() } label: {
-                Label("Stop recording", systemImage: "stop.fill")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
+                PanelActionLabel(title: "Stop recording", systemImage: "stop.fill")
             }
             .buttonStyle(.borderedProminent)
             .tint(.red)
-            .controlSize(.extraLarge)
+            .panelActionStyle()
             .disabled(model.isChangingRecording)
             .padding(.horizontal, PanelMetrics.cardInset)
-            .padding(.top, 14)
+            .padding(.top, 16)
 
             Text("Sources are locked until this recording stops.")
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 16)
         }
     }
 
@@ -73,7 +69,7 @@ struct RecordingStatusView: View {
                 TrackRow(
                     icon: "speaker.wave.2.fill",
                     name: "Mac audio",
-                    caption: "\(model.selectedSystemAudioBundleID == nil ? "All Mac audio" : model.selectedSystemAudioName) · \(AudioLevelState(level: audioLevels.system).label)",
+                    caption: "\(model.selectedSystemAudioBundleID == nil ? "All apps" : model.selectedSystemAudioName) · \(AudioLevelState(level: audioLevels.system).label)",
                     level: audioLevels.system
                 )
                 Divider().padding(.leading, PanelMetrics.contentLeading)
@@ -101,15 +97,19 @@ struct RecordingStatusView: View {
                 if let warning = model.microphoneSilenceWarning {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
                             .foregroundStyle(.orange)
+                            .frame(height: 16)
                             .accessibilityHidden(true)
                         // Keep "30 s" on one line.
                         Text(warning.replacingOccurrences(of: " s.", with: "\u{00A0}s."))
                             .font(.callout)
+                            .lineSpacing(1.5)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(9)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 9)
                     .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
                     .padding(.leading, PanelMetrics.contentLeading)
                     .padding(.trailing, PanelMetrics.rowInset)
@@ -138,7 +138,7 @@ struct RecordingStatusView: View {
                 .accessibilityHidden(true)
             Text("Screen").font(.body.weight(.medium))
             Text(model.selectedScreenSource ?? "Screen video")
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -169,10 +169,10 @@ private struct TrackRow: View {
                 .frame(width: PanelMetrics.iconColumn, height: 20)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(name).font(.body.weight(.medium)).layoutPriority(1)
                     Text(caption)
-                        .font(.caption)
+                        .font(.subheadline.weight(captionColor == .secondary ? .regular : .medium))
                         .foregroundStyle(captionColor)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -187,5 +187,27 @@ private struct TrackRow: View {
         }
         .padding(.horizontal, PanelMetrics.rowInset)
         .padding(.vertical, 12)
+    }
+}
+
+/// "Saving to Lab › Atlas" under the recording and saving timers, with project names shown as in the library.
+struct PanelDestination: View {
+    let prefix: String
+    let path: String?
+
+    private var display: String { MeetingLibrary.displayName(path ?? ArchiveStore.inboxName) }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder")
+                .font(.system(size: 11))
+                .accessibilityHidden(true)
+            Text("\(prefix) \(display)")
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .help(display)
     }
 }

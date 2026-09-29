@@ -8,54 +8,66 @@ struct RecentList: View {
     let showSettings: () -> Void
 
     private static let pendingLimit = 3
-    /// Rows and cards sit this far in; row text adds its own 10 pt to reach the panel's text edge.
-    static let listInset = PanelMetrics.textLeading - 10
+    /// Completed rows sit this far in; their text adds `rowTextInset` to reach the panel's text edge.
+    static let rowInset: CGFloat = 8
+    static let rowTextInset = PanelMetrics.textLeading - rowInset
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
                 SectionLabel("RECENT")
                 Spacer()
                 Button("All meetings") { openSummaries(nil) }
                     .buttonStyle(.link)
-                    .font(.caption)
+                    .foregroundStyle(.tint)
+                    .font(.callout.weight(.medium))
                     .help("Open Meeting summaries")
             }
-            .padding(.horizontal, PanelMetrics.textLeading - Self.listInset)
+            .padding(.leading, PanelMetrics.textLeading)
+            .padding(.trailing, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 6)
 
             if model.pendingItems.isEmpty && model.recentMeetings.isEmpty {
                 Text("Completed meetings will appear here.")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, PanelMetrics.textLeading)
+                    .padding(.vertical, 6)
             }
 
-            ForEach(model.pendingItems.prefix(Self.pendingLimit)) { item in
-                PendingItemCard(model: model, item: item, showSettings: showSettings)
-                    .padding(.bottom, 2)
-            }
-            if model.pendingItems.count > Self.pendingLimit {
-                let extra = model.pendingItems.count - Self.pendingLimit
-                HStack {
-                    Text("\(extra) more saved locally")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Show files") { model.showPendingMeetingsInFinder() }
-                        .buttonStyle(.link)
-                        .font(.caption)
+            if !model.pendingItems.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(model.pendingItems.prefix(Self.pendingLimit)) { item in
+                        PendingItemCard(model: model, item: item, showSettings: showSettings)
+                    }
+                    if model.pendingItems.count > Self.pendingLimit {
+                        let extra = model.pendingItems.count - Self.pendingLimit
+                        HStack {
+                            Text("\(extra) more saved locally")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Show files") { model.showPendingMeetingsInFinder() }
+                                .buttonStyle(.link)
+                                .font(.subheadline)
+                        }
+                        .padding(.horizontal, PanelMetrics.textLeading - PanelMetrics.cardInset)
+                    }
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, PanelMetrics.cardInset)
+                .padding(.top, 2)
+                .padding(.bottom, model.recentMeetings.isEmpty ? 0 : 6)
             }
 
-            ForEach(model.recentMeetings) { meeting in
-                RecentMeetingRow(model: model, meeting: meeting, openSummaries: openSummaries)
+            VStack(spacing: 2) {
+                ForEach(model.recentMeetings) { meeting in
+                    RecentMeetingRow(model: model, meeting: meeting, openSummaries: openSummaries)
+                }
             }
+            .padding(.horizontal, Self.rowInset)
         }
-        .padding(.horizontal, Self.listInset)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
+        .padding(.bottom, 12)
     }
 }
 
@@ -65,6 +77,7 @@ private struct PendingItemCard: View {
     let showSettings: () -> Void
 
     private var heading: String { "\(item.title) · \(PanelDate.relative(item.startedAt, time: true))" }
+    private static let cardRadius: CGFloat = 10
     private var project: String { model.projectDisplayName(item.projectName) }
 
     private static let retryHelp = "Retries all saved recordings once recording, import and processing finish."
@@ -77,17 +90,19 @@ private struct PendingItemCard: View {
         case .queued:
             progressCard(badge: "Queued", stage: nil, detail: "Waiting for the current meeting to finish.")
         case let .failed(message):
-            PanelCard(tint: .orange) {
+            PanelCard(tint: .orange, radius: Self.cardRadius) {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .top, spacing: 10) {
+                    HStack(alignment: .top, spacing: 9) {
                         Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 13))
                             .foregroundStyle(.orange)
-                            .frame(width: 16)
+                            .frame(width: 16, height: 17)
                             .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 4) {
                             titleBlock
                             Text(Self.sentence(message) + " The recording is saved locally.")
                                 .font(.callout)
+                                .lineSpacing(1.5)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
                         }
@@ -95,7 +110,7 @@ private struct PendingItemCard: View {
                     }
                     .accessibilityElement(children: .combine)
                     actions(retry: true, settings: !model.providerReady)
-                        .padding(.leading, 26)
+                        .padding(.leading, 25)
                 }
                 .padding(12)
             }
@@ -109,37 +124,38 @@ private struct PendingItemCard: View {
     }
 
     private var titleBlock: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(heading)
-                .font(.callout.weight(.medium))
+                .font(.body.weight(.medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(heading)
             Text(project)
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
     }
 
     private func progressCard(badge: String, stage: ProcessingStage?, detail: String) -> some View {
-        PanelCard {
+        PanelCard(radius: Self.cardRadius) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     titleBlock
                     Spacer(minLength: 8)
                     Text(badge)
-                        .font(.caption2.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(stage == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
                         .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(stage == nil ? AnyShapeStyle(.quaternary) : AnyShapeStyle(Color.accentColor.opacity(0.14)), in: Capsule())
+                        .padding(.vertical, 3)
+                        .background(stage == nil ? AnyShapeStyle(PanelColors.hover) : AnyShapeStyle(Color.accentColor.opacity(0.12)),
+                                    in: RoundedRectangle(cornerRadius: 5))
                         .fixedSize()
                 }
                 .accessibilityElement(children: .combine)
                 StageBar(stage: stage)
                 Text(detail)
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -149,14 +165,15 @@ private struct PendingItemCard: View {
     }
 
     private func noticeCard(symbol: String, text: String, retry: Bool, settings: Bool) -> some View {
-        PanelCard {
+        PanelCard(radius: Self.cardRadius) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .top, spacing: 9) {
                     Image(systemName: symbol)
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                        .frame(width: 16)
+                        .frame(width: 16, height: 17)
                         .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 4) {
                         titleBlock
                         Text(text)
                             .font(.callout)
@@ -166,7 +183,7 @@ private struct PendingItemCard: View {
                 }
                 .accessibilityElement(children: .combine)
                 actions(retry: retry, settings: settings)
-                    .padding(.leading, 26)
+                    .padding(.leading, 25)
             }
             .padding(12)
         }
@@ -187,7 +204,7 @@ private struct PendingItemCard: View {
                     .help("Configure an AI provider")
             }
         }
-        .controlSize(.small)
+        .controlSize(.regular)
     }
 
     private static func sentence(_ text: String) -> String {
@@ -203,26 +220,36 @@ private struct RecentMeetingRow: View {
     let meeting: ArchivedMeeting
     let openSummaries: (URL?) -> Void
     @State private var hovered = false
+    #if DEBUG
+    @Environment(\.debugHoveredMeeting) private var debugHovered
+    #endif
 
     private var meta: String {
         "\(model.projectDisplayName(meeting.projectName)) · \(PanelDate.relative(meeting.date))"
     }
 
+    private var showsActions: Bool {
+        #if DEBUG
+        if debugHovered == meeting.url { return true }
+        #endif
+        return hovered
+    }
+
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Button { openSummaries(meeting.url) } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(meeting.title)
-                        .font(.callout.weight(.medium))
+                        .font(.body.weight(.medium))
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     Text(meta)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     if let warning = meeting.captureWarning {
                         Label("Partial audio recovery", systemImage: "exclamationmark.triangle")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.orange)
                             .help(warning)
                     }
@@ -234,34 +261,64 @@ private struct RecentMeetingRow: View {
             .help("Open in Meeting summaries")
             .accessibilityLabel("Open summary for \(meeting.title)")
             .accessibilityValue(meeting.captureWarning == nil ? meta : "\(meta), partial audio recovery")
+            // The ellipsis menu appears only on hover; VoiceOver reaches the same actions here.
+            .accessibilityActions { voiceOverActions }
 
-            Menu { actions } label: {
-                Image(systemName: "ellipsis").frame(width: 24, height: 24)
+            // Both states share one fixed frame so the title never reflows on hover.
+            Group {
+                if showsActions {
+                    Menu { actions } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 28, height: 28)
+                            .background(PanelColors.card, in: RoundedRectangle(cornerRadius: 7))
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .help("Meeting actions")
+                    .accessibilityHidden(true)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Meeting actions")
-            .accessibilityLabel("Actions for \(meeting.title)")
+            .frame(width: 28, height: 28)
         }
-        .padding(.horizontal, 10)
+        .padding(.leading, RecentList.rowTextInset)
+        .padding(.trailing, 6)
         .padding(.vertical, 7)
-        .background(hovered ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
+        .background(showsActions ? PanelColors.hover : .clear, in: RoundedRectangle(cornerRadius: 8))
         .onHover { hovered = $0 }
         .contextMenu { actions }
     }
 
+    private func moveToProject() {
+        model.meetingToMove = meeting
+        openWindow(id: "move-meeting")
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    private var canDelete: Bool { !(model.isCaptureBusy || model.isChangingRecording || model.isProcessing) }
+
     @ViewBuilder private var actions: some View {
         Button("Regenerate summary…", systemImage: "arrow.clockwise") { openSummaries(meeting.url) }
-        Button("Move to project…", systemImage: "folder.badge.arrowshape.forward") {
-            model.meetingToMove = meeting
-            openWindow(id: "move-meeting")
-            NSApplication.shared.activate(ignoringOtherApps: true)
-        }
-        .disabled(!model.canMoveMeeting(meeting))
+        Button("Move to project…", systemImage: "folder.badge.arrowshape.forward", action: moveToProject)
+            .disabled(!model.canMoveMeeting(meeting))
         Button("Show in Finder", systemImage: "folder") { model.showInFinder(meeting.url) }
         Divider()
         Button("Move to Trash", systemImage: "trash", role: .destructive) { model.deleteMeeting(meeting) }
-            .disabled(model.isCaptureBusy || model.isChangingRecording || model.isProcessing)
+            .disabled(!canDelete)
+    }
+
+    /// The menu's actions for VoiceOver; unavailable ones are left out rather than disabled.
+    @ViewBuilder private var voiceOverActions: some View {
+        Button("Regenerate summary…") { openSummaries(meeting.url) }
+        if model.canMoveMeeting(meeting) { Button("Move to project…", action: moveToProject) }
+        Button("Show in Finder") { model.showInFinder(meeting.url) }
+        if canDelete { Button("Move to Trash") { model.deleteMeeting(meeting) } }
     }
 }

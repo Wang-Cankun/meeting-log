@@ -11,60 +11,57 @@ struct SavingStatusView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Image(systemName: "tray.and.arrow.down.fill")
-                        .font(.caption)
-                        .foregroundStyle(.tint)
+                HStack(spacing: 7) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: 12, height: 12)
                         .accessibilityHidden(true)
                     Text("SAVING RECORDING")
-                        .font(.caption.weight(.semibold))
+                        .font(.callout.weight(.semibold))
+                        .tracking(0.2)
                         .foregroundStyle(.tint)
                     Spacer()
                     PanelMoreMenu(showSettings: showSettings)
+                        .padding(.vertical, -6)
                 }
                 Text(Self.formatted(duration))
                     .font(.system(size: timerSize, weight: .semibold).monospacedDigit())
+                    .tracking(-0.5)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Recording length")
                     .accessibilityValue(Duration.seconds(duration).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide)))
-                Label("Saving to \(model.recordingDestinationPath ?? ArchiveStore.inboxName)", systemImage: "folder")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(model.recordingDestinationPath ?? ArchiveStore.inboxName)
+                PanelDestination(prefix: "Saving to", path: model.recordingDestinationPath)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, PanelMetrics.textLeading)
-            .padding(.trailing, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 14)
+            .padding(.trailing, PanelMetrics.cardInset)
+            .padding(.top, 16)
+            .padding(.bottom, 18)
 
             SavingStepsCard(progress: model.savingProgress, step: step)
                 .padding(.horizontal, PanelMetrics.cardInset)
 
             Button {} label: {
-                Text("Saving…")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
+                PanelActionLabel(title: "Saving…")
             }
             .buttonStyle(.bordered)
-            .controlSize(.extraLarge)
+            .panelActionStyle()
             .disabled(true)
             .padding(.horizontal, PanelMetrics.cardInset)
-            .padding(.top, 14)
+            .padding(.top, 16)
 
             Text(model.providerReady
                  ? "You can close this panel. MeetingLog keeps saving and will notify you when the meeting is ready."
                  : "You can close this panel. The recording will wait in Recent until an AI provider is configured.")
-                .font(.caption)
+                .font(.subheadline)
+                .lineSpacing(2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 24)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 16)
         }
     }
 
@@ -85,9 +82,9 @@ private struct SavingStepsCard: View {
     var body: some View {
         PanelCard {
             VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack {
-                        Text(Self.headline(step)).font(.callout.weight(.medium))
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(Self.headline(step)).font(.body.weight(.medium))
                         Spacer()
                         Group {
                             if step == .mixingAudio, let fraction = progress.fraction {
@@ -96,12 +93,19 @@ private struct SavingStepsCard: View {
                                 Text(ordinal)
                             }
                         }
-                        .font(.caption.monospacedDigit())
+                        .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                     }
                     if step == .mixingAudio {
                         if let fraction = progress.fraction {
-                            ProgressView(value: fraction).progressViewStyle(.linear)
+                            GeometryReader { proxy in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(PanelColors.track)
+                                    Capsule().fill(Color.accentColor)
+                                        .frame(width: proxy.size.width * min(max(fraction, 0), 1))
+                                }
+                            }
+                            .frame(height: 6)
                         } else {
                             ProgressView().progressViewStyle(.linear)
                         }
@@ -123,8 +127,8 @@ private struct SavingStepsCard: View {
                                     Image(systemName: "circle").foregroundStyle(.tertiary)
                                 }
                             }
-                            .font(.caption.weight(.semibold))
-                            .frame(width: 16, height: 16)
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 14, height: 14)
                             .accessibilityHidden(true)
                             Text(Self.title(item, current: step))
                                 .font(.callout)

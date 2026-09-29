@@ -6,7 +6,7 @@ struct MeetingProcessor {
     let client: ProviderClient
     /// When set, a speech service transcribes audio and the provider handles only text steps.
     var speech: SpeechTranscriber? = nil
-    var progress: @Sendable (String) -> Void = { _ in }
+    var progress: @Sendable (ProcessingProgress) -> Void = { _ in }
 
     func process(directory: URL, manifest original: SessionManifest, projectName: String?) async throws -> URL {
         var manifest = original
@@ -24,7 +24,7 @@ struct MeetingProcessor {
             let projectContext = try store.meetingContext(for: resolvedProjectName)
 
             let transcriptionContext = "More-specific meeting context overrides general preferences; context is not evidence of spoken commitments.\nGlobal context:\n\(context)\n\nProject: \(resolvedProjectName)\nProject context:\n\(projectContext)"
-            progress("Preparing audio")
+            progress(.init(stage: .prepare, detail: "Preparing audio"))
             var blocks: [TranscriptBlock]
             if let speech {
                 blocks = try await transcribeWithSpeech(speech, directory: directory, preparation: capturePreparation,
@@ -67,7 +67,8 @@ struct MeetingProcessor {
                 } checkpoint: { updated in
                     try saveBlocks(updated, in: directory)
                 } progress: { completed, total in
-                    progress("Transcribing \(completed) of \(total) blocks · up to \(TranscriptionBatch.concurrencyLimit) at once")
+                    progress(.init(stage: .transcribe(completed: completed, total: total),
+                                   detail: "Transcribing \(completed) of \(total) blocks · up to \(TranscriptionBatch.concurrencyLimit) at once"))
                 }
             }
             guard blocks.allSatisfy({ $0.status == .complete && !$0.text.isEmpty }) else {
@@ -77,14 +78,14 @@ struct MeetingProcessor {
             let rawTranscript = MarkdownRenderer.transcript(blocks: blocks, parts: manifest.importedParts ?? [])
             let evidence = try SummaryEvidence(text: rawTranscript, source: .raw)
             try rawTranscript.write(to: directory.appending(path: "transcript_raw.md"), atomically: true, encoding: .utf8)
-            progress("Cleaning transcript across excerpts")
+            progress(.init(stage: .clean, detail: "Cleaning transcript across excerpts"))
             // Speech-service output is already clean-style; local rules keep its words and speaker labels intact.
             let transcript = speech == nil
                 ? try await TranscriptPolisher.clean(raw: rawTranscript, context: transcriptionContext, client: client)
                 : TranscriptPolisher.tidy(rawTranscript)
             try transcript.write(to: directory.appending(path: "transcript.md"), atomically: true, encoding: .utf8)
 
-            progress("Writing summary")
+            progress(.init(stage: .summary, detail: "Writing summary"))
             let analysisPrompt = Prompts.analysis(
                     evidence: evidence,
                     globalContext: context,
@@ -94,7 +95,7 @@ struct MeetingProcessor {
             let analysisText = try await client.complete(prompt: analysisPrompt)
             // Validate the draft schema before spending a second request on evidence review.
             _ = try decode(MeetingAnalysis.self, from: analysisText)
-            progress("Checking summary evidence")
+            progress(.init(stage: .evidence, detail: "Checking summary evidence"))
             let reviewPrompt = Prompts.review(analysis: analysisText, evidence: evidence, context: transcriptionContext)
             let reviewedText = try await client.complete(prompt: reviewPrompt)
             var analysis = try decode(MeetingAnalysis.self, from: reviewedText)
@@ -103,7 +104,7 @@ struct MeetingProcessor {
             analysis.projectName = resolvedProjectName
 
             try transcript.write(to: directory.appending(path: "transcript.md"), atomically: true, encoding: .utf8)
-            progress("Writing Simplified Chinese summary")
+            progress(.init(stage: .chinese, detail: "Writing Simplified Chinese summary"))
             let summary = MarkdownRenderer.summary(analysis, startedAt: manifest.startedAt, evidenceSource: evidence.source)
             let chinese = try await TranscriptPolisher.chinese(summary: summary, context: transcriptionContext, client: client)
             try (capturePreparation?.addingNotice(to: summary) ?? summary)
@@ -146,7 +147,7 @@ struct MeetingProcessor {
                 try? FileManager.default.removeItem(at: destination.appending(path: "system-audio.caf"))
                 try? FileManager.default.removeItem(at: destination.appending(path: "microphone.m4a"))
             }
-            progress("Complete")
+            progress(.init(stage: .complete, detail: "Complete"))
             return destination
         } catch {
             manifest.status = .failed
@@ -215,7 +216,8 @@ struct MeetingProcessor {
             } checkpoint: { updated in
                 try saveBlocks(updated, in: directory)
             } progress: { completed, total in
-                progress("Transcribing with \(SpeechTranscriber.model) · \(completed) of \(total)")
+                progress(.init(stage: .transcribe(completed: completed, total: total),
+                               detail: "Transcribing with \(SpeechTranscriber.model) · \(completed) of \(total)"))
             }
         }
 

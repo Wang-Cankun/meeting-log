@@ -7,6 +7,7 @@ trap 'rm -rf "$check_dir"' EXIT
 swiftc \
   "$repo_dir/Sources/MeetingLog/Models/MeetingModels.swift" \
   "$repo_dir/Sources/MeetingLog/Capture/LevelUpdateGate.swift" \
+  "$repo_dir/Sources/MeetingLog/Capture/MicrophoneSilenceMonitor.swift" \
   "$repo_dir/Sources/MeetingLog/Storage/ArchiveStore.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/MarkdownRenderer.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/MediaProcessor.swift" \
@@ -41,6 +42,8 @@ import Foundation
     @MainActor static func main() async throws {
         try AppModel.checkRetryWhileBusy()
         try await AppModel.checkCaptureRecoveryPresentation()
+        try await AppModel.checkSavingPhase()
+        try await AppModel.checkMicrophoneSilence()
         try SystemAudioCapture.checkWriteFailure()
         await CaptureService.checkWriteFailureDelivery()
     }

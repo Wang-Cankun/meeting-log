@@ -69,6 +69,137 @@ extension AppModel {
         print("Capture state passed: unavailable source, locked project, immediate recovery actions and retained files")
     }
 
+    @MainActor static func checkSavingPhase() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "saving-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        UserDefaults.standard.setVolatileDomain([
+            ArchiveStore.rootDefaultsKey: root.path, "providerAPIKey": ""
+        ], forName: UserDefaults.argumentDomain)
+        let model = AppModel()
+        let store = ArchiveStore(root: root)
+
+        // Stop enters saving synchronously: frozen duration, no recording symbol, no second toggle.
+        let (short, shortManifest) = try store.createPendingSession(videoEnabled: false, microphoneID: nil)
+        try Data("unreadable fixture".utf8).write(to: short.appending(path: "system-audio.caf"))
+        model.currentDirectory = short
+        model.currentManifest = shortManifest
+        model.recordingDestinationPath = "Inbox"
+        model.phase = .recording(startedAt: Date())
+        model.toggleRecording()
+        guard case let .saving(shortDuration, .stoppingTracks) = model.phase, shortDuration < 10 else {
+            preconditionFailure("Stop must enter saving immediately: \(model.phase)")
+        }
+        model.toggleRecording()
+        precondition(model.phase == .saving(duration: shortDuration, step: .stoppingTracks), "Saving ignores toggles")
+        precondition(model.isSaving && model.isCaptureBusy && !model.isRecording && model.statusText == "Saving recording")
+        precondition(StatusItemPresentation(phase: model.phase).systemImage != "record.circle.fill")
+        precondition(model.recordingDestinationPath == "Inbox", "Saving keeps showing the destination")
+        while model.isChangingRecording { await Task.yield() }
+        precondition(model.phase == .idle && !FileManager.default.fileExists(atPath: short.path),
+                     "Recordings under 10 seconds are still discarded")
+        precondition(model.notice?.isError == false && model.recordingDestinationPath == nil)
+
+        // A failed mix leaves the session and its raw track in place for Retry.
+        let (long, longManifest) = try store.createPendingSession(videoEnabled: false, microphoneID: nil)
+        let longTrack = long.appending(path: "system-audio.caf")
+        try Data("unreadable fixture".utf8).write(to: longTrack)
+        model.currentDirectory = long
+        model.currentManifest = longManifest
+        model.recordingDestinationPath = "Inbox"
+        model.phase = .recording(startedAt: Date().addingTimeInterval(-20))
+        model.toggleRecording()
+        var steps: [SavingStep] = []
+        while model.isChangingRecording {
+            if case let .saving(duration, step) = model.phase {
+                precondition(duration >= 20, "The saving timer is frozen at the final duration")
+                if steps.last != step { steps.append(step) }
+            }
+            await Task.yield()
+        }
+        precondition(steps == [.stoppingTracks, .mixingAudio], "\(steps)")
+        guard case .failed = model.phase else { preconditionFailure("Failed mix must fail: \(model.phase)") }
+        precondition(FileManager.default.fileExists(atPath: longTrack.path), "Raw media survives a failed save")
+        precondition(model.savingProgress.fraction == nil && model.recordingDestinationPath == nil)
+        precondition(model.pendingItems.count == 1 && model.pendingItems[0].id.standardizedFileURL.path == long.standardizedFileURL.path, "\(model.pendingItems) \(long)")
+        guard case .failed = model.pendingItems[0].state else { preconditionFailure("\(model.pendingItems)") }
+
+        // A late export fraction after mixing never reaches the saving card.
+        model.phase = .saving(duration: 30, step: .handingOff)
+        model.reportMixProgress(0.5)
+        precondition(model.savingProgress.fraction == nil, "Late mix progress after hand-off is ignored")
+        model.phase = .saving(duration: 30, step: .mixingAudio)
+        model.reportMixProgress(0.25)
+        precondition(model.savingProgress.fraction == 0.25)
+        model.savingProgress.fraction = nil
+
+        // Previews stay off while saving, even when the panel opens or closes.
+        model.phase = .saving(duration: 30, step: .mixingAudio)
+        model.isPanelOpen = true
+        let errorBefore = model.systemAudioError
+        await model.startPreviewMonitoring(generation: model.previewGeneration)
+        precondition(model.phase == .saving(duration: 30, step: .mixingAudio) && model.systemAudioError == errorBefore,
+                     "Preview must not start while saving")
+        model.panelDidClose()
+        model.phase = .idle
+        print("Saving phase passed: frozen timer, locked toggle, static symbol, discard, retained media, previews off")
+    }
+
+    @MainActor static func checkMicrophoneSilence() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "silence-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        UserDefaults.standard.setVolatileDomain([
+            ArchiveStore.rootDefaultsKey: root.path, "providerAPIKey": ""
+        ], forName: UserDefaults.argumentDomain)
+        let model = AppModel()
+        let second: UInt64 = 1_000_000_000
+        let start = 10 * second
+        model.phase = .recording(startedAt: Date())
+        model.recordingIncludesMicrophone = true
+        model.recordingMicrophoneName = "Test Mic"
+        model.observeMicrophoneSignal(-120, at: start)
+        model.observeMicrophoneSignal(-120, at: start + 29_900_000_000)
+        precondition(model.microphoneSilenceWarning == nil)
+        model.observeMicrophoneSignal(-120, at: start + 30 * second)
+        let warning = model.microphoneSilenceWarning ?? ""
+        precondition(warning.contains("Test Mic") && warning.contains("30 s") && !warning.contains("muted"), warning)
+        precondition(model.silenceEpisodeCount == 1 && model.silenceNotificationCount == 1)
+        model.observeMicrophoneSignal(-120, at: start + 60 * second)
+        precondition(model.silenceEpisodeCount == 1, "One warning per episode")
+        model.observeMicrophoneSignal(-40, at: start + 61 * second)
+        model.observeMicrophoneSignal(-120, at: start + 61 * second + second / 10)
+        precondition(model.microphoneSilenceWarning != nil, "A blip does not clear the warning")
+        model.observeMicrophoneSignal(-50, at: start + 62 * second)
+        model.observeMicrophoneSignal(-50, at: start + 64 * second)
+        precondition(model.microphoneSilenceWarning == nil, "Sustained input clears the warning")
+        model.observeMicrophoneSignal(-120, at: start + 65 * second)
+        model.observeMicrophoneSignal(-120, at: start + 95 * second)
+        precondition(model.silenceEpisodeCount == 2 && model.microphoneSilenceWarning != nil)
+        precondition(model.silenceNotificationCount == 1, "Notifications are spaced within a recording")
+        model.observeMicrophoneSignal(-75, at: start + 96 * second)
+        model.observeMicrophoneSignal(-75, at: start + 400 * second)
+        precondition(model.microphoneSilenceWarning == nil && model.silenceEpisodeCount == 2, "A quiet room never warns")
+
+        model.recordingIncludesMicrophone = false
+        model.observeMicrophoneSignal(-120, at: start + 500 * second)
+        model.observeMicrophoneSignal(-120, at: start + 600 * second)
+        precondition(model.silenceEpisodeCount == 2, "An excluded microphone never warns")
+        model.recordingIncludesMicrophone = true
+        model.observeMicrophoneSignal(-120, at: start + 700 * second)
+        model.observeMicrophoneSignal(-120, at: start + 730 * second)
+        precondition(model.silenceEpisodeCount == 3 && model.microphoneSilenceWarning != nil)
+        precondition(model.silenceNotificationCount == 2, "A later episode notifies again")
+
+        model.isChangingRecording = true
+        model.stopRecording()
+        precondition(model.microphoneSilenceWarning == nil && !model.recordingIncludesMicrophone, "Stop clears the warning")
+        while model.isChangingRecording { await Task.yield() }
+        precondition(model.phase == .idle && model.recordingMicrophoneName == nil)
+        model.observeMicrophoneSignal(-120, at: start + 800 * second)
+        model.observeMicrophoneSignal(-120, at: start + 900 * second)
+        precondition(model.microphoneSilenceWarning == nil && model.silenceEpisodeCount == 3, "Idle readings are ignored")
+        print("Microphone silence passed: 30 s floor, blip hysteresis, spaced notifications, quiet room, excluded mic, stop and idle")
+    }
+
     @MainActor static func checkRetryWhileBusy() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "retry-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

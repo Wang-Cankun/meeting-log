@@ -283,6 +283,8 @@ struct SummaryReviewView: View {
         guard !busy, revision == nil,
               let request = model.summaryOpenRequest, request.id != handledRequestID else { return }
         handledRequestID = request.id
+        // Consumed once: a later plain open, after this window is rebuilt, must not reselect it.
+        model.summaryOpenRequest = nil
         selection = request.url
         reload()
     }

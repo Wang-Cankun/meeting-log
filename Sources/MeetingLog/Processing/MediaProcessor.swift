@@ -67,7 +67,8 @@ struct MediaProcessor {
         (try? AVAudioFile(forReading: url).length) == 0
     }
 
-    func makeCaptureMovie(systemAudio: URL?, microphone: URL?, destination: URL) async throws {
+    func makeCaptureMovie(systemAudio: URL?, microphone: URL?, destination: URL,
+                          progress: (@Sendable (Double) -> Void)? = nil) async throws {
         guard systemAudio != nil || microphone != nil else { throw MediaError.emptyRecording }
         let composition = AVMutableComposition()
         var parameters: [AVMutableAudioMixInputParameters] = []
@@ -88,12 +89,27 @@ struct MediaProcessor {
         let temporary = destination.deletingLastPathComponent()
             .appending(path: ".capture-\(UUID().uuidString).mov")
         defer { try? fileManager.removeItem(at: temporary) }
+        let observed = ObservedExport(session: exporter)
+        let monitor = progress.map { report in
+            Task {
+                for await state in observed.session.states(updateInterval: 0.25) {
+                    if case let .exporting(fraction) = state { report(fraction.fractionCompleted) }
+                }
+            }
+        }
+        defer { monitor?.cancel() }
         try await exporter.export(to: temporary, as: .mov)
         if fileManager.fileExists(atPath: destination.path) {
             _ = try fileManager.replaceItemAt(destination, withItemAt: temporary)
         } else {
             try fileManager.moveItem(at: temporary, to: destination)
         }
+    }
+
+    /// AVFoundation documents observing `states(updateInterval:)` while `export(to:as:)` runs;
+    /// the session is only read by the observer, never configured after export starts.
+    private struct ObservedExport: @unchecked Sendable {
+        let session: AVAssetExportSession
     }
 
     func prepareAudio(from capture: URL, in directory: URL, durationLimit: TimeInterval? = nil) async throws -> (audio: URL, chunks: [AudioChunk]) {

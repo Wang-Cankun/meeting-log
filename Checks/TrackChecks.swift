@@ -37,8 +37,10 @@ func checkSeparateTrackTranscription() async throws {
     let session = URLSession(configuration: configuration)
     defer { session.invalidateAndCancel() }
     let provider = ProviderClient(baseURL: "https://tracks.invalid", apiKey: "fixture", model: "fixture", session: session)
-    let archived = try await MeetingProcessor(store: store, client: provider)
+    let stages = StageRecorder()
+    let archived = try await MeetingProcessor(store: store, client: provider, progress: { stages.record($0) })
         .process(directory: directory, manifest: manifest, projectName: project.name)
+    stages.verifyCompletePipeline()
     let raw = try String(contentsOf: archived.appending(path: "transcript_raw.md"), encoding: .utf8)
     precondition(raw.contains("Turns labeled Me come from the recording user's microphone."))
     precondition(raw.contains("[00:01] Speaker A: Remote update.\n\n[00:04] Me: Local reply."), raw)
@@ -46,6 +48,28 @@ func checkSeparateTrackTranscription() async throws {
     precondition(FileManager.default.fileExists(atPath: archived.appending(path: "audio.m4a").path))
     precondition(!FileManager.default.fileExists(atPath: archived.appending(path: "microphone.m4a").path))
     print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, silence handling")
+}
+
+/// Collects structured processing progress from any isolation context.
+final class StageRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [ProcessingProgress] = []
+
+    var stages: [ProcessingStage] { lock.withLock { values.map(\.stage) } }
+
+    func record(_ progress: ProcessingProgress) {
+        lock.withLock { values.append(progress) }
+    }
+
+    func verifyCompletePipeline() {
+        let stages = stages
+        precondition(stages.first == .prepare, "\(stages)")
+        precondition(zip(stages, stages.dropFirst()).allSatisfy { $0.segment <= $1.segment }, "Stages regressed: \(stages)")
+        precondition(stages.contains { if case let .transcribe(_, total) = $0 { total > 0 } else { false } }, "\(stages)")
+        for stage in [ProcessingStage.clean, .summary, .evidence, .chinese] { precondition(stages.contains(stage), "\(stages)") }
+        precondition(stages.last == .complete, "\(stages)")
+        precondition(lock.withLock { values.allSatisfy { !$0.detail.isEmpty } })
+    }
 }
 
 private func writeTone(to url: URL, seconds: Int, fileType: AVFileType) throws {

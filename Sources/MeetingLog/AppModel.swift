@@ -18,6 +18,13 @@ final class AudioLevels: ObservableObject {
     }
 }
 
+/// Mix export progress lives outside `AppModel` so frequent updates do not redraw the menu bar label.
+@MainActor
+final class SavingProgress: ObservableObject {
+    /// Export fraction in 0...1 while mixing; nil when unknown or not mixing.
+    @Published var fraction: Double?
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var isImporting = false
@@ -43,7 +50,16 @@ final class AppModel: ObservableObject {
     @Published var microphonePermission = AVCaptureDevice.authorizationStatus(for: .audio)
     @Published var systemAudioError: String?
     @Published private(set) var isPanelOpen = false
-    @Published private(set) var processingText: String?
+    /// Stage and readable detail of the meeting being processed; nil when nothing is processing.
+    @Published private(set) var processingProgress: ProcessingProgress?
+    /// Pending sessions for the Recent list, ordered processing, queued, failed, waiting, needs retry.
+    @Published private(set) var pendingItems: [PendingMeetingItem] = []
+    /// Fixed project path for the recording in progress or being saved.
+    @Published private(set) var recordingDestinationPath: String?
+    @Published private(set) var recordingIncludesMicrophone = false
+    @Published private(set) var recordingMicrophoneName: String?
+    /// Inline warning while an included microphone has delivered no input for 30 s.
+    @Published private(set) var microphoneSilenceWarning: String?
     @Published private(set) var processingCount = 0
     @Published private(set) var processingFailureCount = 0
     @Published private(set) var waitingForProcessingCount = 0
@@ -64,6 +80,7 @@ final class AppModel: ObservableObject {
     let microphone = MicrophoneCapture()
     let microphones = MicrophoneCapture.devices
     let audioLevels = AudioLevels()
+    let savingProgress = SavingProgress()
 
     private var currentDirectory: URL?
     private var currentManifest: SessionManifest?
@@ -73,6 +90,11 @@ final class AppModel: ObservableObject {
     private var previewGeneration = 0
     private var isResumingPendingSessions = false
     private var pendingCaptureFailure: String?
+    /// Fallback failure text per pending path when the processor could not persist its failure.
+    private var processingErrors: [String: String] = [:]
+    private var silenceMonitor = MicrophoneSilenceMonitor()
+    private(set) var silenceEpisodeCount = 0
+    private(set) var silenceNotificationCount = 0
 
     private static let projectDefaultsKey = "selectedProjectName"
 
@@ -91,6 +113,9 @@ final class AppModel: ObservableObject {
         microphone.onLevel = { [weak self] value in
             Task { @MainActor in self?.audioLevels.setMicrophone(value) }
         }
+        microphone.onSignal = { [weak self] decibels, time in
+            Task { @MainActor in self?.observeMicrophoneSignal(decibels, at: time) }
+        }
         capture.onSystemAudioLevel = { [weak self] in self?.audioLevels.setSystem($0) }
         Task {
             refreshApplications()
@@ -102,7 +127,17 @@ final class AppModel: ObservableObject {
         if case .recording = phase { true } else { false }
     }
 
+    var isSaving: Bool {
+        if case .saving = phase { true } else { false }
+    }
+
+    /// Recording or saving: sources stay locked and previews stay off.
+    var isCaptureBusy: Bool { isRecording || isSaving }
+
     var isProcessing: Bool { processingCount > 0 }
+
+    /// A saved key and a chosen model: new and pending recordings process instead of waiting.
+    var providerReady: Bool { keySaved && !selectedModelID.isEmpty }
 
     var hasScreenSource: Bool { selectedScreenSource != nil }
 
@@ -122,6 +157,7 @@ final class AppModel: ObservableObject {
             if selectedSystemAudioBundleID != nil, !selectedSystemAudioIsAvailable { return "Audio application unavailable" }
             return "Ready to record"
         case .recording: return "Recording"
+        case .saving: return "Saving recording"
         case let .failed(value): return value
         }
     }
@@ -233,6 +269,7 @@ final class AppModel: ObservableObject {
         for key in ["providerName", "providerBaseURL", "providerModel", "providerAPIKey"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        refreshPendingStatus()
     }
 
     func selectMicrophone(_ id: String?) {
@@ -293,7 +330,7 @@ final class AppModel: ObservableObject {
 
     func panelDidClose() {
         isPanelOpen = false
-        guard !isRecording else { return }
+        guard !isCaptureBusy else { return }
         schedulePreviewStop()
     }
 
@@ -467,6 +504,7 @@ final class AppModel: ObservableObject {
                     && microphonePermission == .authorized
                     && !microphones.isEmpty
                 let destination = try store.resolveProject(selectedProjectName)
+                recordingDestinationPath = destination.displayPath
                 var created = try store.createPendingSession(
                     videoEnabled: videoEnabled,
                     microphoneID: recordsMicrophone ? selectedMicrophoneID : nil
@@ -488,6 +526,9 @@ final class AppModel: ObservableObject {
                 )
                 if let pendingCaptureFailure { throw CaptureError.recordingFailed(pendingCaptureFailure) }
                 systemAudioError = nil
+                recordingIncludesMicrophone = recordsMicrophone
+                recordingMicrophoneName = recordsMicrophone ? currentMicrophoneName : nil
+                resetMicrophoneSilence()
                 phase = .recording(startedAt: Date())
                 isChangingRecording = false
             } catch {
@@ -501,6 +542,7 @@ final class AppModel: ObservableObject {
                 currentDirectory = nil
                 currentManifest = nil
                 pendingCaptureFailure = nil
+                endRecordingSession()
                 phase = .failed(error.localizedDescription)
                 isChangingRecording = false
                 refreshPendingStatus()
@@ -509,9 +551,69 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var currentMicrophoneName: String {
+        microphones.first { $0.uniqueID == selectedMicrophoneID }?.localizedName
+            ?? AVCaptureDevice.default(for: .audio)?.localizedName
+            ?? "the microphone"
+    }
+
+    private func resetMicrophoneSilence() {
+        silenceMonitor.reset()
+        microphoneSilenceWarning = nil
+    }
+
+    /// Clears per-recording presentation state at every exit from recording or saving.
+    private func endRecordingSession() {
+        resetMicrophoneSilence()
+        recordingIncludesMicrophone = false
+        recordingMicrophoneName = nil
+        recordingDestinationPath = nil
+        savingProgress.fraction = nil
+    }
+
+    private func observeMicrophoneSignal(_ decibels: Float?, at uptimeNanoseconds: UInt64) {
+        guard isRecording, recordingIncludesMicrophone else { return }
+        switch silenceMonitor.observe(decibels: decibels, at: uptimeNanoseconds) {
+        case .none: break
+        case .began:
+            let warning = "No input from \(recordingMicrophoneName ?? "the microphone") for 30 s. Check the selected microphone."
+            microphoneSilenceWarning = warning
+            silenceEpisodeCount += 1
+            if silenceMonitor.shouldNotify(at: uptimeNanoseconds) {
+                silenceNotificationCount += 1
+                MeetingNotifications.post(title: "Microphone has no input", body: warning + " Recording continues.", folder: nil)
+            }
+        case .ended:
+            microphoneSilenceWarning = nil
+        }
+    }
+
+    /// The saving panel promises a notification, so outcomes reached with the panel closed post one.
+    private func notifyIfPanelClosed(title: String, body: String) {
+        guard !isPanelOpen else { return }
+        MeetingNotifications.post(title: title, body: body, folder: nil)
+    }
+
+    /// Late export callbacks are ignored once saving has moved past mixing.
+    private func reportMixProgress(_ fraction: Double) {
+        guard case .saving(_, .mixingAudio) = phase else { return }
+        savingProgress.fraction = fraction
+    }
+
+    private func setSavingStep(_ step: SavingStep) {
+        guard case let .saving(duration, _) = phase else { return }
+        phase = .saving(duration: duration, step: step)
+    }
+
     private func stopRecording(failure initialFailure: String? = nil) {
         let stoppedAt = Date()
         let recordingStartedAt: Date? = if case let .recording(startedAt) = phase { startedAt } else { nil }
+        if let recordingStartedAt {
+            phase = .saving(duration: max(0, stoppedAt.timeIntervalSince(recordingStartedAt)), step: .stoppingTracks)
+        }
+        resetMicrophoneSilence()
+        recordingIncludesMicrophone = false
+        savingProgress.fraction = nil
         Task {
             var failure = initialFailure ?? pendingCaptureFailure
             pendingCaptureFailure = nil
@@ -521,8 +623,10 @@ final class AppModel: ObservableObject {
             catch { failure = failure ?? error.localizedDescription }
 
             guard let directory = currentDirectory, var manifest = currentManifest else {
+                endRecordingSession()
+                phase = failure.map(AppPhase.failed) ?? .idle
                 isChangingRecording = false
-                if let failure { phase = .failed(failure) }
+                if let failure { notifyIfPanelClosed(title: "Recording needs attention", body: failure) }
                 return
             }
 
@@ -532,35 +636,48 @@ final class AppModel: ObservableObject {
                 if let store = try? recordingStore() { try? store.write(manifest, to: directory) }
                 currentDirectory = nil
                 currentManifest = nil
+                endRecordingSession()
                 phase = .failed(failure)
                 isChangingRecording = false
                 refreshPendingStatus()
                 schedulePreviewStart()
+                notifyIfPanelClosed(title: "Recording needs attention",
+                                    body: "The recording is saved locally. \(failure)")
                 return
             }
 
             if let recordingStartedAt,
                !RecordingDurationPolicy.shouldProcess(startedAt: recordingStartedAt, stoppedAt: stoppedAt) {
+                endRecordingSession()
                 do {
                     try recordingStore().discardPendingSession(id: manifest.id)
                     currentDirectory = nil
                     currentManifest = nil
                     phase = .idle
+                    notice = PanelNotice(message: "Recordings shorter than 10 seconds are discarded.")
+                    notifyIfPanelClosed(title: "Recording discarded", body: "Recordings shorter than 10 seconds are discarded.")
                 } catch {
                     phase = .failed(error.localizedDescription)
+                    notifyIfPanelClosed(title: "Recording needs attention", body: error.localizedDescription)
                 }
                 isChangingRecording = false
                 schedulePreviewStart()
                 return
             }
 
+            setSavingStep(.mixingAudio)
+            savingProgress.fraction = nil
             do {
-                _ = try await CapturePreparation.prepare(in: directory)
+                _ = try await CapturePreparation.prepare(in: directory) { fraction in
+                    Task { @MainActor in self.reportMixProgress(fraction) }
+                }
                 manifest.status = .captured
                 let store = try recordingStore()
                 try store.write(manifest, to: directory)
+                setSavingStep(.handingOff)
                 currentDirectory = nil
                 currentManifest = nil
+                endRecordingSession()
                 phase = .idle
                 isChangingRecording = false
                 schedulePreviewStart()
@@ -571,22 +688,25 @@ final class AppModel: ObservableObject {
                 if let store = try? recordingStore() { try? store.write(manifest, to: directory) }
                 currentDirectory = nil
                 currentManifest = nil
+                endRecordingSession()
                 phase = .failed(error.localizedDescription)
                 isChangingRecording = false
                 refreshPendingStatus()
                 schedulePreviewStart()
+                notifyIfPanelClosed(title: "Recording needs attention",
+                                    body: "The recording is saved locally. \(error.localizedDescription)")
             }
         }
     }
 
     private func startPreviewMonitoring(generation: Int) async {
-        guard generation == previewGeneration, isPanelOpen, !isRecording else { return }
+        guard generation == previewGeneration, isPanelOpen, !isCaptureBusy else { return }
 
         if microphoneEnabled, microphonePermission == .notDetermined {
             _ = await AVCaptureDevice.requestAccess(for: .audio)
             microphonePermission = AVCaptureDevice.authorizationStatus(for: .audio)
         }
-        guard generation == previewGeneration, isPanelOpen, !isRecording else { return }
+        guard generation == previewGeneration, isPanelOpen, !isCaptureBusy else { return }
         if microphoneEnabled, microphonePermission == .authorized, !microphones.isEmpty {
             do {
                 try await microphone.setPreview(
@@ -598,7 +718,7 @@ final class AppModel: ObservableObject {
             catch { phase = .failed(error.localizedDescription) }
         }
 
-        guard generation == previewGeneration, isPanelOpen, !isRecording, selectedSystemAudioIsAvailable else { return }
+        guard generation == previewGeneration, isPanelOpen, !isCaptureBusy, selectedSystemAudioIsAvailable else { return }
         do {
             try await capture.startPreview(applicationBundleID: selectedSystemAudioBundleID)
             if systemAudioError != nil { phase = .idle }
@@ -653,7 +773,7 @@ final class AppModel: ObservableObject {
             urls, date: date, projectName: destination.name, store: store
         )
         waitingForProcessingCount += 1
-        if keySaved, !selectedModelID.isEmpty {
+        if providerReady {
             enqueue(ProcessingJob(directory: directory, manifest: manifest, store: store,
                                   baseURL: providerBaseURL, key: apiKey, model: selectedModelID,
                                   speech: speechTranscriber, projectName: manifest.projectName))
@@ -703,7 +823,7 @@ final class AppModel: ObservableObject {
             recoverable.append((directory, manifest))
         }
         waitingForProcessingCount = recoverable.count
-        guard keySaved, !selectedModelID.isEmpty else { return }
+        guard providerReady else { return }
         for (directory, manifest) in recoverable {
             enqueue(ProcessingJob(
                 directory: directory,
@@ -736,7 +856,9 @@ final class AppModel: ObservableObject {
         while !processingQueue.isEmpty {
             let job = processingQueue.removeFirst()
             currentProcessingPath = job.directory.path
+            processingErrors[job.directory.path] = nil
             processingCount = processingQueue.count + 1
+            refreshPendingStatus()
             do {
                 let destination = try await process(job)
                 waitingForProcessingCount = max(0, waitingForProcessingCount - 1)
@@ -745,21 +867,22 @@ final class AppModel: ObservableObject {
                 MeetingNotifications.post(title: "Meeting ready", body: title ?? destination.lastPathComponent, folder: destination)
             } catch {
                 if case ProviderError.authentication = error { keySaved = false }
-                processingText = error.localizedDescription
+                processingErrors[job.directory.path] = error.localizedDescription
                 MeetingNotifications.post(title: "Processing needs attention",
                                           body: "The recording is saved locally. \(error.localizedDescription)", folder: nil)
             }
             currentProcessingPath = nil
+            processingProgress = nil
             refreshPendingStatus()
         }
         processingCount = 0
         refreshPendingStatus()
-        if processingFailureCount == 0 { processingText = nil }
         processingTask = nil
     }
 
     private func process(_ job: ProcessingJob) async throws -> URL {
-        processingText = "Preparing"
+        let path = job.directory.path
+        processingProgress = ProcessingProgress(stage: .prepare, detail: "Preparing")
         let processor = MeetingProcessor(
             store: job.store,
             client: ProviderClient(
@@ -768,8 +891,12 @@ final class AppModel: ObservableObject {
                 model: job.model
             ),
             speech: job.speech
-        ) { [weak self] text in
-            Task { @MainActor in self?.processingText = text }
+        ) { [weak self] progress in
+            Task { @MainActor in
+                // A late callback from a finished job must not overwrite the next job.
+                guard let self, self.currentProcessingPath == path else { return }
+                self.processingProgress = progress
+            }
         }
         return try await processor.process(directory: job.directory, manifest: job.manifest, projectName: job.projectName)
     }
@@ -835,12 +962,27 @@ final class AppModel: ObservableObject {
 
     private func refreshPendingStatus() {
         guard let store = try? recordingStore(), let sessions = try? store.pendingSessions() else { return }
-        let pending = sessions.filter { $0.0 != currentDirectory }
+        let pending = sessions.filter { $0.0 != currentDirectory }.map { directory, original in
+            // Keep a failure visible even when the processor could not write it to the manifest.
+            var manifest = original
+            if manifest.status != .failed, let error = processingErrors[directory.path] {
+                manifest.status = .failed
+                manifest.lastError = error
+            }
+            return (directory, manifest)
+        }
         waitingForProcessingCount = pending.count
-        let busyPaths = Set(processingQueue.map { $0.directory.path } + [currentProcessingPath].compactMap { $0 })
+        let queuedPaths = Set(processingQueue.map { $0.directory.path })
+        let busyPaths = queuedPaths.union([currentProcessingPath].compactMap { $0 })
         let failures = pending.filter { $0.1.status == .failed && !busyPaths.contains($0.0.path) }
         processingFailureCount = failures.count
         pendingFailureText = failures.first?.1.lastError
+        pendingItems = PendingMeetingItem.sorted(pending.map { directory, manifest in
+            PendingMeetingItem(directory: directory, manifest: manifest, state: PendingMeetingItem.state(
+                for: manifest, path: directory.path, processingPath: currentProcessingPath,
+                queuedPaths: queuedPaths, providerReady: providerReady))
+        })
+        processingErrors = processingErrors.filter { path, _ in pending.contains { $0.0.path == path } }
     }
 
     private var canManageArchive: Bool {

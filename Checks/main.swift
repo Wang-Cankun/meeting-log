@@ -284,6 +284,86 @@ let earlyRecordingStatus = StatusItemPresentation(phase: .recording(startedAt: D
 let lateRecordingStatus = StatusItemPresentation(phase: .recording(startedAt: Date(timeIntervalSince1970: 3_600)))
 precondition(earlyRecordingStatus == lateRecordingStatus)
 
+// Saving is its own phase: no recording action, never the recording symbol.
+precondition(AppPhase.saving(duration: 12, step: .mixingAudio).recordingAction(isBusy: false) == nil)
+precondition(AppPhase.saving(duration: 12, step: .mixingAudio).clearingFailure == .saving(duration: 12, step: .mixingAudio))
+let savingStatus = StatusItemPresentation(phase: .saving(duration: 12, step: .stoppingTracks))
+precondition(savingStatus.systemImage != "record.circle.fill" && savingStatus != earlyRecordingStatus)
+precondition(savingStatus.accessibilityLabel.contains("saving"))
+precondition(SavingStep.allCases == [.stoppingTracks, .mixingAudio, .handingOff])
+
+precondition(ProcessingStage.segmentTitles.count == 6)
+precondition(ProcessingStage.prepare.segment == 0 && ProcessingStage.prepare.segmentFraction == 0)
+precondition(ProcessingStage.transcribe(completed: 3, total: 8).segment == 1)
+precondition(ProcessingStage.transcribe(completed: 3, total: 8).segmentFraction == 0.375)
+precondition(ProcessingStage.transcribe(completed: 0, total: 0).segmentFraction == 0)
+precondition(ProcessingStage.clean.segment == 2 && ProcessingStage.summary.segment == 3 && ProcessingStage.evidence.segment == 4)
+precondition(ProcessingStage.chinese.segment == 5 && ProcessingStage.complete.segment == 6)
+
+let pendingFixture = SessionManifest(id: UUID(), startedAt: Date(), status: .failed, videoEnabled: false,
+                                     microphoneID: nil, lastError: "Upload failed")
+var capturedFixture = pendingFixture
+capturedFixture.status = .captured
+capturedFixture.lastError = nil
+func pendingState(_ manifest: SessionManifest, processing: String? = nil, queued: Set<String> = [],
+                  providerReady: Bool = true) -> PendingMeetingItem.State {
+    PendingMeetingItem.state(for: manifest, path: "/p", processingPath: processing, queuedPaths: queued,
+                             providerReady: providerReady)
+}
+precondition(pendingState(pendingFixture, processing: "/p", queued: ["/p"]) == .processing, "Processing wins over failure")
+precondition(pendingState(pendingFixture, queued: ["/p"]) == .queued)
+precondition(pendingState(pendingFixture, providerReady: false) == .failed("Upload failed"), "Failure wins over provider")
+precondition(pendingState(capturedFixture, processing: "/other", providerReady: false) == .waitingForProvider)
+precondition(pendingState(capturedFixture) == .needsRetry)
+var unexplainedFailure = pendingFixture
+unexplainedFailure.lastError = nil
+precondition(pendingState(unexplainedFailure) == .failed("Processing stopped before completion."))
+let olderItem = PendingMeetingItem(directory: URL(filePath: "/a"), manifest: capturedFixture, state: .needsRetry)
+var newerManifest = capturedFixture
+newerManifest = SessionManifest(id: UUID(), startedAt: capturedFixture.startedAt.addingTimeInterval(60), status: .captured,
+                                videoEnabled: false, microphoneID: nil, lastError: nil, importedFileName: "call.m4a")
+let newerItem = PendingMeetingItem(directory: URL(filePath: "/b"), manifest: newerManifest, state: .needsRetry)
+let activeItem = PendingMeetingItem(directory: URL(filePath: "/c"), manifest: capturedFixture, state: .processing)
+precondition(PendingMeetingItem.sorted([olderItem, newerItem, activeItem]).map(\.id.path) == ["/c", "/b", "/a"])
+precondition(olderItem.title == "Recording" && newerItem.title == "call.m4a")
+
+// Microphone no-input uses raw dBFS: a quiet room never warns; digital silence warns once per episode.
+let second: UInt64 = 1_000_000_000
+var silence = MicrophoneSilenceMonitor()
+for tick in 0...3_000 { precondition(silence.observe(decibels: -75, at: UInt64(tick) * second / 10) == .none) }
+silence.reset()
+let silenceStart = 5 * second
+precondition(silence.observe(decibels: -120, at: silenceStart) == .none)
+precondition(silence.observe(decibels: -120, at: silenceStart + 29_900_000_000) == .none)
+precondition(silence.observe(decibels: -120, at: silenceStart + 30 * second) == .began)
+precondition(silence.observe(decibels: -120, at: silenceStart + 90 * second) == .none, "One warning per episode")
+precondition(silence.observe(decibels: nil, at: silenceStart + 91 * second) == .none && silence.isWarning)
+precondition(silence.observe(decibels: Float.nan, at: silenceStart + 92 * second) == .none && silence.isWarning)
+// A single crackle, or input shorter than the recovery delay, keeps the episode open.
+precondition(silence.observe(decibels: -40, at: silenceStart + 93 * second) == .none && silence.isWarning)
+precondition(silence.observe(decibels: -120, at: silenceStart + 93 * second + second / 10) == .none && silence.isWarning)
+precondition(silence.observe(decibels: -50, at: silenceStart + 94 * second) == .none && silence.isWarning)
+precondition(silence.observe(decibels: -50, at: silenceStart + 95 * second) == .none && silence.isWarning)
+precondition(silence.observe(decibels: -50, at: silenceStart + 96 * second) == .ended, "Two seconds of input end the episode")
+precondition(silence.observe(decibels: -50, at: silenceStart + 97 * second) == .none)
+precondition(silence.observe(decibels: -Float.infinity, at: silenceStart + 100 * second) == .none)
+precondition(silence.observe(decibels: nil, at: silenceStart + 110 * second) == .none && silence.silentSince == silenceStart + 100 * second,
+             "After a real reading, a missing channel counts as silence")
+precondition(silence.observe(decibels: -Float.infinity, at: silenceStart + 130 * second) == .began, "−∞ is silence; a new episode warns again")
+silence.reset()
+precondition(silence.observe(decibels: nil, at: 0) == .none && silence.silentSince == nil, "Missing readings before the first are unknown")
+precondition(silence.observe(decibels: Float.nan, at: 40 * second) == .none && silence.silentSince == nil)
+precondition(silence.observe(decibels: -96, at: 41 * second) == .none && silence.silentSince == 41 * second, "−96 dBFS is silence")
+precondition(silence.observe(decibels: -95.9, at: 42 * second) == .none && silence.silentSince == nil, "−95.9 dBFS is input")
+precondition(silence.observe(decibels: nil, at: 43 * second) == .none && silence.silentSince == 43 * second)
+precondition(silence.observe(decibels: nil, at: 73 * second) == .began, "A channel lost mid-recording warns")
+// System notifications are spaced; the inline warning still follows each episode.
+precondition(silence.shouldNotify(at: 73 * second))
+precondition(!silence.shouldNotify(at: 200 * second))
+precondition(silence.shouldNotify(at: 373 * second))
+silence.reset()
+precondition(silence.shouldNotify(at: 374 * second), "Each recording may notify again")
+
 var levelGate = LevelUpdateGate(intervalNanoseconds: 100)
 precondition(levelGate.shouldPublish(at: 1_000))
 precondition(!levelGate.shouldPublish(at: 1_099))

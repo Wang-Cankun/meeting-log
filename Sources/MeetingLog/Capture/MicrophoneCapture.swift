@@ -11,6 +11,8 @@ final class MicrophoneCapture: NSObject, AVCaptureFileOutputRecordingDelegate, @
     private var recordingError: Error?
     private var previewGeneration = 0
     var onLevel: (@Sendable (Float) -> Void)?
+    /// Raw dBFS (the louder of average and peak hold; nil without an audio channel) and uptime, every 100 ms.
+    var onSignal: (@Sendable (Float?, UInt64) -> Void)?
 
     static var devices: [AVCaptureDevice] {
         AVCaptureDevice.DiscoverySession(
@@ -67,8 +69,11 @@ final class MicrophoneCapture: NSObject, AVCaptureFileOutputRecordingDelegate, @
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(100))
         timer.setEventHandler { [weak self] in
-            let db = self?.dataOutput.connection(with: .audio)?.audioChannels.first?.averagePowerLevel ?? -60
+            let channel = self?.dataOutput.connection(with: .audio)?.audioChannels.first
+            let raw = channel.map { max($0.averagePowerLevel, $0.peakHoldLevel) }
+            let db = channel?.averagePowerLevel ?? -60
             self?.onLevel?(max(0, min(1, (db + 60) / 60)))
+            self?.onSignal?(raw, DispatchTime.now().uptimeNanoseconds)
         }
         timer.resume()
         self.timer = timer

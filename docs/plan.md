@@ -26,13 +26,13 @@ Split audio, enforce block coverage, generate Markdown, archive the session, and
 
 ### 4. Recording panel and settings: implemented
 
-Use a compact timer-led panel with persistent Mac audio and microphone rows, optional screen video, menu-bar recording time, system appearance, and a foreground Settings window. Recording remains available without an AI provider; unprocessed sessions wait locally.
+Use a compact timer-led panel with persistent Mac audio and microphone rows, optional screen video, static menu-bar recording indicator, system appearance, and a foreground Settings window. Recording remains available without an AI provider; unprocessed sessions wait locally.
 
 **Exit proof:** the panel and Settings lifecycle pass a real app check in both system appearances.
 
 ### 5. Project and recent meeting management: implemented
 
-Treat project folders as the source of truth, save each recording to the project chosen in the panel with `Inbox` as the fallback, use human-readable Unicode meeting folders, list the three most recent completed meetings, and move deleted meetings to Trash. Settings owns archive location and project creation; Finder and Obsidian own renaming and context editing.
+Treat project folders as the source of truth, save each recording to the project chosen in the panel with `Inbox` as the fallback, use human-readable Unicode meeting folders, list pending sessions as status cards above the three most recent completed meetings (a click opens Meeting summaries), and move deleted meetings to Trash. Settings owns archive location and project creation; Finder and Obsidian own renaming and context editing.
 
 **Exit proof:** a new Unicode project receives a completed meeting under `meetings/MMddyyyy-<short-title>`, Finder actions select their targets, and deleting a recent meeting moves its complete directory to Trash without exposing `.pending`.
 

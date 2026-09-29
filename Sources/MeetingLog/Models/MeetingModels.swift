@@ -138,15 +138,27 @@ struct ArchivedMeeting: Identifiable, Equatable {
     var captureWarning: String? = nil
 }
 
+/// Steps between Stop and handing the session to processing; raw tracks are never removed here.
+enum SavingStep: Int, CaseIterable, Equatable {
+    case stoppingTracks
+    case mixingAudio
+    case handingOff
+}
+
 enum AppPhase: Equatable {
     case idle
     case recording(startedAt: Date)
+    /// Stop was requested: the timer is frozen at `duration` while tracks close and mix.
+    case saving(duration: TimeInterval, step: SavingStep)
     case failed(String)
 
     func recordingAction(isBusy: Bool) -> RecordingAction? {
         guard !isBusy else { return nil }
-        if case .recording = self { return .stop }
-        return .start
+        switch self {
+        case .recording: return .stop
+        case .saving: return nil
+        case .idle, .failed: return .start
+        }
     }
 
     var clearingFailure: AppPhase {
@@ -173,12 +185,108 @@ struct StatusItemPresentation: Equatable {
     let accessibilityLabel: String
 
     init(phase: AppPhase) {
-        if case .recording = phase {
+        switch phase {
+        case .recording:
             systemImage = "record.circle.fill"
             accessibilityLabel = "MeetingLog recording"
-        } else {
+        case .saving:
+            // Saving must never claim that capture is still running.
+            systemImage = "waveform"
+            accessibilityLabel = "MeetingLog, saving recording"
+        case .idle, .failed:
             systemImage = "waveform"
             accessibilityLabel = "MeetingLog, ready"
+        }
+    }
+}
+
+/// Structured processing position; the panel draws `segmentTitles` as a six-segment bar.
+enum ProcessingStage: Equatable, Sendable {
+    case prepare
+    case transcribe(completed: Int, total: Int)
+    case clean
+    case summary
+    case evidence
+    case chinese
+    case complete
+
+    static let segmentTitles = ["Prepare", "Transcribe", "Clean", "Summary", "Evidence", "中文"]
+
+    /// Index of the current segment in `segmentTitles`; `complete` is 6, meaning every segment is full.
+    var segment: Int {
+        switch self {
+        case .prepare: 0
+        case .transcribe: 1
+        case .clean: 2
+        case .summary: 3
+        case .evidence: 4
+        case .chinese: 5
+        case .complete: 6
+        }
+    }
+
+    /// Partial fill of the current segment: completed/total while transcribing, otherwise 0.
+    var segmentFraction: Double {
+        guard case let .transcribe(completed, total) = self, total > 0 else { return 0 }
+        return min(1, max(0, Double(completed) / Double(total)))
+    }
+}
+
+struct ProcessingProgress: Equatable, Sendable {
+    var stage: ProcessingStage
+    /// Human-readable line shown under the stage bar.
+    var detail: String
+}
+
+/// One pending (not yet archived) session as the panel's Recent list shows it.
+struct PendingMeetingItem: Identifiable, Equatable {
+    enum State: Equatable {
+        case processing
+        case queued
+        case failed(String)
+        case waitingForProvider
+        case needsRetry
+
+        var sortOrder: Int {
+            switch self {
+            case .processing: 0
+            case .queued: 1
+            case .failed: 2
+            case .waitingForProvider: 3
+            case .needsRetry: 4
+            }
+        }
+    }
+
+    /// The pending session directory.
+    let id: URL
+    let startedAt: Date
+    let title: String
+    let projectName: String?
+    let state: State
+
+    init(directory: URL, manifest: SessionManifest, state: State) {
+        id = directory
+        startedAt = manifest.startedAt
+        title = manifest.importedFileName ?? "Recording"
+        projectName = manifest.projectName
+        self.state = state
+    }
+
+    static func state(for manifest: SessionManifest, path: String, processingPath: String?,
+                      queuedPaths: Set<String>, providerReady: Bool) -> State {
+        if path == processingPath { return .processing }
+        if queuedPaths.contains(path) { return .queued }
+        if manifest.status == .failed { return .failed(manifest.lastError ?? "Processing stopped before completion.") }
+        if !providerReady { return .waitingForProvider }
+        return .needsRetry
+    }
+
+    /// Active work first, then failures, then idle sessions; newest first within a state.
+    static func sorted(_ items: [Self]) -> [Self] {
+        items.sorted {
+            ($0.state.sortOrder, -$0.startedAt.timeIntervalSinceReferenceDate)
+                < ($1.state.sortOrder, -$1.startedAt.timeIntervalSinceReferenceDate)
         }
     }
 }

@@ -35,6 +35,15 @@ struct CapturePreparation: Codable, Equatable {
         return markdown.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + notice + "\n"
     }
 
+    /// Mixes with export progress in 0...1; a system-only fallback mix restarts the fraction from 0.
+    @MainActor
+    static func prepare(in directory: URL, mixProgress: @escaping @Sendable (Double) -> Void) async throws -> Self {
+        try await prepare(in: directory) { system, microphone, destination in
+            try await MediaProcessor().makeCaptureMovie(systemAudio: system, microphone: microphone,
+                                                        destination: destination, progress: mixProgress)
+        }
+    }
+
     /// A preparing receipt is deliberately not reusable, even if an older movie exists.
     /// Persist the selected mode before publishing media, so a crash cannot hide an omission.
     @MainActor

@@ -129,6 +129,10 @@ struct SummariesView: View {
             // New or deleted meetings appear without a manual refresh.
             if !locked { reload(reloadingCurrent: false) } else { pendingArchiveRefresh = true }
         }
+        .onChange(of: model.summariesEnabled) { _, enabled in
+            // Off means no further language model requests, including a generation already under way.
+            if !enabled { cancel() }
+        }
         .onChange(of: model.archiveRootPath) { _, _ in
             cancel()
             if !busy, let selection { model.summaryLockedURLs.remove(selection) }

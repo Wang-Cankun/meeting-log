@@ -262,7 +262,7 @@ private struct RecentMeetingRow: View {
             }
             .buttonStyle(.plain)
             .help("Open in Meeting summaries")
-            .accessibilityLabel("Open summary for \(meeting.title)")
+            .accessibilityLabel(meeting.hasSummary ? "Open summary for \(meeting.title)" : "Open transcript for \(meeting.title)")
             .accessibilityValue(meeting.captureWarning == nil ? meta : "\(meta), partial audio recovery")
             // The ellipsis menu appears only on hover; VoiceOver reaches the same actions here.
             .accessibilityActions { voiceOverActions }

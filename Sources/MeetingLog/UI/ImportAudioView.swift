@@ -79,7 +79,9 @@ struct ImportAudioView: View {
                     .frame(height: min(CGFloat(files.count) * 64, 200))
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
                     if !imported {
-                        Text("Processed in this order. Files remain separate sources in one transcript and summary.")
+                        Text(model.summariesEnabled
+                             ? "Processed in this order. Files remain separate sources in one transcript and summary."
+                             : "Processed in this order. Files remain separate sources in one transcript.")
                             .font(.caption).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }

@@ -19,12 +19,15 @@ struct MoveMeetingView: View {
                 HStack {
                     Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                     Spacer()
-                    Button("Review summary…") {
+                    // Transcript-only meetings have no summary to review or regenerate.
+                    Button(moved.hasSummary ? "Review summary…" : "Open meeting…") {
                         model.summaryOpenRequest = SummaryOpenRequest(url: moved.url)
                         openWindow(id: "meeting-summaries")
                         dismiss()
                     }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                    .help("Regenerate the summary using the new project’s context")
+                    .help(moved.hasSummary && model.canGenerateSummaries
+                          ? "Regenerate the summary using the new project’s context"
+                          : "Open this meeting in Meeting summaries")
                 }
             } else if let meeting = model.meetingToMove {
                 Text("Move to project").font(.title2.bold())

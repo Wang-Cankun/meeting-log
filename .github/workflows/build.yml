@@ -13,14 +13,12 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - name: Build and ad-hoc sign
-        run: scripts/build-app.sh
-      - name: Archive app
-        run: ditto -c -k --sequesterRsrc --keepParent .build/MeetingLog.app .build/MeetingLog-macOS-arm64.zip
+      - name: Build, ad-hoc sign, and verify DMG
+        run: scripts/build-dmg.sh
       - uses: actions/upload-artifact@v4
         with:
           name: MeetingLog-macOS-arm64
-          path: .build/MeetingLog-macOS-arm64.zip
+          path: .build/MeetingLog-macOS-arm64.dmg
           include-hidden-files: true
           if-no-files-found: error
 
@@ -39,4 +37,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" MeetingLog-macOS-arm64.zip --verify-tag --generate-notes --title "$RELEASE_TAG"
+        run: gh release create "$RELEASE_TAG" MeetingLog-macOS-arm64.dmg --verify-tag --generate-notes --title "$RELEASE_TAG" --notes 'Requires macOS 26 or later on Apple Silicon. Open the DMG and drag MeetingLog to Applications. Ad-hoc signed, not notarized; first launch may require approval in System Settings → Privacy & Security.'

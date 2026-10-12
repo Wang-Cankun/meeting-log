@@ -27,9 +27,9 @@ Failed recordings stay local. **Retry** resumes their recovery, and **Show files
 
 ## Build and distribution
 
-Local macOS and CI builds use the same `scripts/build-app.sh` script and free ad-hoc signing by default. No Apple account, Developer ID certificate, or signing secrets are needed. The GitHub Actions build produces `MeetingLog-macOS-arm64.zip`, preserving the signed app bundle and executable permissions. These builds are not notarized; macOS may require approval in System Settings → Privacy & Security on first launch after download. Signing is free; AI provider usage and any applicable CI runner charges are separate.
+Local macOS and CI builds use the same `scripts/build-app.sh` script and free ad-hoc signing by default. No Apple account, Developer ID certificate, or signing secrets are needed. Run `scripts/build-dmg.sh` locally to build and verify `MeetingLog-macOS-arm64.dmg`; GitHub Actions uses the same script. Open the disk image and drag MeetingLog to Applications. The image preserves the signed app bundle and executable permissions. These builds are not notarized; macOS may require approval in System Settings → Privacy & Security on first launch after download. Signing is free; AI provider usage and any applicable CI runner charges are separate.
 
-Every push, pull request, and manual workflow run builds a downloadable Actions artifact. Pushing a version tag matching `v*` also publishes a GitHub Release with that build's `MeetingLog-macOS-arm64.zip` and automatically generated release notes. Publication runs only after the macOS build succeeds and uses the built-in GitHub token; no additional secrets are required. Builds still use ad-hoc signing and are not notarized.
+Every push, pull request, and manual workflow run builds a downloadable Actions artifact. Pushing a version tag matching `v*` also publishes a GitHub Release with that build's `MeetingLog-macOS-arm64.dmg` and automatically generated release notes. Publication runs only after the macOS build succeeds and uses the built-in GitHub token; no additional secrets are required. Builds still use ad-hoc signing and are not notarized.
 
 To release a reviewed commit on `main`, choose an unused version (for example, `v0.1.0`):
 

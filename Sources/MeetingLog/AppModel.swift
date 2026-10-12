@@ -914,7 +914,8 @@ final class AppModel: ObservableObject {
 
     private func process(_ job: ProcessingJob) async throws -> URL {
         let path = job.directory.path
-        processingProgress = ProcessingProgress(stage: .prepare, detail: "Preparing")
+        let summaries = job.summaries
+        processingProgress = ProcessingProgress(stage: .prepare, detail: "Preparing", summaries: summaries)
         let processor = MeetingProcessor(
             store: job.store,
             client: job.summaries ? ProviderClient(baseURL: job.baseURL, apiKey: job.key, model: job.model) : nil,
@@ -923,6 +924,8 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 // A late callback from a finished job must not overwrite the next job.
                 guard let self, self.currentProcessingPath == path else { return }
+                var progress = progress
+                progress.summaries = summaries
                 self.processingProgress = progress
             }
         }

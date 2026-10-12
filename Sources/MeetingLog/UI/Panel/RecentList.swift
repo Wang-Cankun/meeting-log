@@ -86,9 +86,12 @@ private struct PendingItemCard: View {
         switch item.state {
         case .processing:
             progressCard(badge: "Processing", stage: model.processingProgress?.stage ?? .prepare,
+                         summaries: model.processingProgress?.summaries ?? model.summariesEnabled,
                          detail: model.processingProgress?.detail ?? "Preparing")
         case .queued:
-            progressCard(badge: "Queued", stage: nil, detail: "Waiting for the current meeting to finish.")
+            // Settings cannot change while processing, so queued jobs share the saved mode.
+            progressCard(badge: "Queued", stage: nil, summaries: model.summariesEnabled,
+                         detail: "Waiting for the current meeting to finish.")
         case let .failed(message):
             PanelCard(tint: .orange, radius: Self.cardRadius) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -137,7 +140,7 @@ private struct PendingItemCard: View {
         }
     }
 
-    private func progressCard(badge: String, stage: ProcessingStage?, detail: String) -> some View {
+    private func progressCard(badge: String, stage: ProcessingStage?, summaries: Bool, detail: String) -> some View {
         PanelCard(radius: Self.cardRadius) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
@@ -153,7 +156,7 @@ private struct PendingItemCard: View {
                         .fixedSize()
                 }
                 .accessibilityElement(children: .combine)
-                StageBar(stage: stage)
+                StageBar(stage: stage, summaries: summaries)
                 Text(detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

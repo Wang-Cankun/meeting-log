@@ -350,6 +350,15 @@ precondition(ProcessingStage.transcribe(completed: 3, total: 8).segmentFraction 
 precondition(ProcessingStage.transcribe(completed: 0, total: 0).segmentFraction == 0)
 precondition(ProcessingStage.clean.segment == 2 && ProcessingStage.summary.segment == 3 && ProcessingStage.evidence.segment == 4)
 precondition(ProcessingStage.chinese.segment == 5 && ProcessingStage.complete.segment == 6)
+// Transcript-only jobs end after Clean; the bar and VoiceOver count only the stages they run.
+precondition(ProcessingStage.segmentTitles(summaries: true) == ProcessingStage.segmentTitles)
+precondition(ProcessingStage.segmentTitles(summaries: false) == ["Prepare", "Transcribe", "Clean"])
+precondition(ProcessingStage.progressDescription(.transcribe(completed: 3, total: 8), summaries: true) == "Step 2 of 6, Transcribe, 3 of 8")
+precondition(ProcessingStage.progressDescription(.chinese, summaries: true) == "Step 6 of 6, Chinese")
+precondition(ProcessingStage.progressDescription(.clean, summaries: false) == "Step 3 of 3, Clean")
+precondition(ProcessingStage.progressDescription(.complete, summaries: false) == "Complete")
+precondition(ProcessingStage.progressDescription(nil, summaries: false) == "Not started")
+precondition(ProcessingProgress(stage: .prepare, detail: "Preparing").summaries, "Progress defaults to the summary pipeline")
 
 let pendingFixture = SessionManifest(id: UUID(), startedAt: Date(), status: .failed, videoEnabled: false,
                                      microphoneID: nil, lastError: "Upload failed")

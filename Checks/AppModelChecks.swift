@@ -134,8 +134,14 @@ extension AppModel {
         let silence = root.appending(path: "silence.flac")
         try MediaProcessor.encodeSilence(seconds: 2, destination: silence)
         try MediaProcessor.encodeSpeech(source: silence, destination: directory.appending(path: "original.m4a"))
+        final class ProgressLog { var values: [ProcessingProgress] = [] }
+        let progressLog = ProgressLog()
+        let progressWatch = model.$processingProgress.sink { if let value = $0 { progressLog.values.append(value) } }
         await model.resumePendingSessions()
         await model.processingTask?.value
+        progressWatch.cancel()
+        precondition(!progressLog.values.isEmpty && progressLog.values.allSatisfy { !$0.summaries },
+                     "The panel must draw a transcript-only job's bar without summary stages")
         let pending = try store.pendingSessions()
         let meetings = try store.recentMeetings()
         precondition(pending.isEmpty && meetings.count == 1, model.pendingFailureText ?? "Missing meeting")

@@ -305,7 +305,9 @@ private struct RecentMeetingRow: View {
     private var canDelete: Bool { !(model.isCaptureBusy || model.isChangingRecording || model.isProcessing) }
 
     @ViewBuilder private var actions: some View {
-        Button("Regenerate summary…", systemImage: "arrow.clockwise") { openSummaries(meeting.url) }
+        if meeting.hasSummary {
+            Button("Regenerate summary…", systemImage: "arrow.clockwise") { openSummaries(meeting.url) }
+        }
         Button("Move to project…", systemImage: "folder.badge.arrowshape.forward", action: moveToProject)
             .disabled(!model.canMoveMeeting(meeting))
         Button("Show in Finder", systemImage: "folder") { model.showInFinder(meeting.url) }
@@ -316,7 +318,7 @@ private struct RecentMeetingRow: View {
 
     /// The menu's actions for VoiceOver; unavailable ones are left out rather than disabled.
     @ViewBuilder private var voiceOverActions: some View {
-        Button("Regenerate summary…") { openSummaries(meeting.url) }
+        if meeting.hasSummary { Button("Regenerate summary…") { openSummaries(meeting.url) } }
         if model.canMoveMeeting(meeting) { Button("Move to project…", action: moveToProject) }
         Button("Show in Finder") { model.showInFinder(meeting.url) }
         if canDelete { Button("Move to Trash") { model.deleteMeeting(meeting) } }

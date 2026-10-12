@@ -60,8 +60,7 @@ struct SummariesView: View {
         return SummaryDocument.parse(proposedMarkdown).title != SummaryDocument.parse(displayedMarkdown).title
     }
     private var canRegenerate: Bool {
-        meeting != nil && !locked && transcriptAvailable
-            && !model.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        meeting?.hasSummary == true && !locked && transcriptAvailable && model.canGenerateSummaries
     }
 
     var body: some View {
@@ -173,7 +172,7 @@ struct SummariesView: View {
                 Text("简体中文").tag(true)
             }
             .pickerStyle(.segmented).labelsHidden().fixedSize()
-            .disabled(meeting == nil)
+            .disabled(meeting?.hasSummary != true)
             .help("Summary language")
         }
         ToolbarItemGroup(placement: .primaryAction) {
@@ -210,8 +209,10 @@ struct SummariesView: View {
 
     /// Where a summary comes from, shown only on the Regenerate button rather than as a bar in the document.
     private var regenerateHelp: String {
-        guard !model.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "Add an AI provider in Settings to generate a summary."
+        if meeting?.hasSummary == false { return "This meeting was saved as a transcript only, without an AI summary." }
+        guard model.canGenerateSummaries else {
+            return model.summariesEnabled ? "Add an AI provider in Settings to generate a summary."
+                                          : "Turn on AI summaries in Settings to regenerate."
         }
         let host = URL(string: model.providerBaseURL)?.host ?? "the configured provider"
         let fallback = evidenceSource == .legacy ? " (legacy fallback)" : ""
@@ -316,6 +317,11 @@ struct SummariesView: View {
         }
         evidenceSource = TranscriptDocument.evidenceSource(in: meeting.url)
         transcriptAvailable = FileManager.default.fileExists(atPath: meeting.url.appending(path: evidenceSource.rawValue).path)
+        guard meeting.hasSummary else {
+            // Transcript-only meetings have no summary files to read.
+            current = ""; currentChinese = nil; missingContext = false
+            return
+        }
         currentChinese = try? String(contentsOf: meeting.url.appending(path: "summary_cn.md"), encoding: .utf8)
         let context = (try? store.meetingContext(for: meeting.projectName)) ?? ""
         missingContext = context.components(separatedBy: .newlines).allSatisfy {

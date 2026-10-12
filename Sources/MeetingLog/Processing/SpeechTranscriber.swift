@@ -25,7 +25,7 @@ struct SpeechTranscriber: Sendable {
         let silence = FileManager.default.temporaryDirectory.appending(path: "speech-check-\(UUID()).flac")
         defer { try? FileManager.default.removeItem(at: silence) }
         try MediaProcessor.encodeSilence(seconds: 1, destination: silence)
-        _ = try await transcribe(audio: silence, diarize: false, phrases: [])
+        _ = try await transcribe(audio: silence, diarize: true, phrases: [])
     }
 
     func transcribe(audio: URL, diarize: Bool, phrases: [String]) async throws -> SpeechResult {
@@ -51,7 +51,7 @@ struct SpeechTranscriber: Sendable {
             let (data, response) = try await session.upload(for: request, from: upload)
             guard let http = response as? HTTPURLResponse else { throw ProviderError.invalidResponse }
             guard (200..<300).contains(http.statusCode) else {
-                if http.statusCode == 401 || http.statusCode == 403 { throw ProviderError.authentication }
+                if http.statusCode == 401 || http.statusCode == 403 { throw SpeechError.authentication }
                 let body = String(decoding: data.prefix(300), as: UTF8.self)
                 // A slow upload is reported as a 400 form error; it is a timeout and worth retrying.
                 let status = http.statusCode == 400 && body.contains("MinRequestBodyDataRate") ? 408 : http.statusCode
@@ -154,10 +154,12 @@ struct SpeechResult: Decodable, Sendable {
 }
 
 enum SpeechError: LocalizedError {
+    case authentication
     case missingTiming
 
     var errorDescription: String? {
         switch self {
+        case .authentication: "Azure Speech rejected the speech key. Update the Speech endpoint and key in Settings."
         case .missingTiming: "Speech transcription returned phrases without usable timestamps."
         }
     }

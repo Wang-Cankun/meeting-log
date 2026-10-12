@@ -49,6 +49,7 @@ enum TranscriptionBatch {
                     blocks[value.index].error = error.localizedDescription
                     if firstError == nil { firstError = error }
                     if case ProviderError.authentication = error { firstError = error }
+                    if case SpeechError.authentication = error { firstError = error }
                 }
                 try checkpoint(blocks)
                 progress(complete, blocks.count)

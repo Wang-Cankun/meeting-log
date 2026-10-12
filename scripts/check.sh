@@ -33,6 +33,7 @@ swiftc \
   "$repo_dir/Checks/CaptureRecoveryChecks.swift" \
   "$repo_dir/Checks/TrackChecks.swift" \
   "$repo_dir/Checks/SpeechChecks.swift" \
+  "$repo_dir/Checks/SettingsChecks.swift" \
   "$repo_dir/Checks/main.swift" \
   -module-cache-path "$repo_dir/.build/check-module-cache" \
   -o "$check_dir/check"
@@ -46,6 +47,7 @@ cat > "$check_dir/RetryMain.swift" <<'SWIFT'
 import Foundation
 @main struct RetryChecks {
     @MainActor static func main() async throws {
+        try await AppModel.checkSettingsConfiguration()
         try AppModel.checkRetryWhileBusy()
         try await AppModel.checkCaptureRecoveryPresentation()
         try await AppModel.checkSavingPhase()
@@ -60,6 +62,6 @@ sources=("${(@)sources:#*/MeetingLogApp.swift}")
 sources=("${(@)sources:#*/AppModel.swift}")
 sources=("${(@)sources:#*/SystemAudioCapture.swift}")
 sources=("${(@)sources:#*/CaptureService.swift}")
-swiftc -parse-as-library -swift-version 6 "${sources[@]}" "$check_dir/AppModel.swift" "$check_dir/Capture.swift" "$check_dir/RetryMain.swift" \
+swiftc -parse-as-library -swift-version 6 "${sources[@]}" "$check_dir/AppModel.swift" "$check_dir/Capture.swift" "$repo_dir/Checks/SettingsChecks.swift" "$check_dir/RetryMain.swift" \
     -module-cache-path "$repo_dir/.build/check-module-cache" -o "$check_dir/retry-check"
 "$check_dir/retry-check"

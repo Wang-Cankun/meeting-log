@@ -23,8 +23,25 @@ struct ProviderClient: Sendable {
         }
     }
 
-    func verifyConfiguration() async throws {
-        _ = try await complete(prompt: "Reply with OK.")
+    func verifyConfiguration(includingAudio: Bool = false) async throws {
+        let response = try await complete(prompt: "Reply with a JSON object: {\"ok\":true}.")
+        guard (try? JSONSerialization.jsonObject(with: Data(response.utf8))) is [String: Any] else {
+            throw ProviderError.configuration("The model did not return a JSON object. Choose a model that supports JSON output.")
+        }
+        if includingAudio {
+            let directory = FileManager.default.temporaryDirectory.appending(path: "provider-check-\(UUID())")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let silence = directory.appending(path: "silence.flac")
+            let audio = directory.appending(path: "silence.m4a")
+            try MediaProcessor.encodeSilence(seconds: 1, destination: silence)
+            try MediaProcessor.encodeSpeech(source: silence, destination: audio)
+            do {
+                _ = try await transcribe(audio: audio, prompt: "Transcribe this audio. If it is silent, reply with [no audible speech].")
+            } catch {
+                throw ProviderError.configuration("Audio input test failed: \(error.localizedDescription) Choose an audio-capable model or Azure Speech for transcription.")
+            }
+        }
     }
 
     func transcribe(audio: URL, prompt: String) async throws -> String {

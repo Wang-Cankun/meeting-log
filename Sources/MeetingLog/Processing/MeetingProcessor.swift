@@ -43,12 +43,16 @@ struct MeetingProcessor {
                 default:
                     throw MediaError.emptyRecording
                 }
-                blocks = try loadBlocks(in: directory) ?? prepared.chunks.enumerated().map {
+                let plan = prepared.chunks.enumerated().map {
                     TranscriptBlock(id: $0.offset, startSeconds: $0.element.startSeconds, endSeconds: $0.element.endSeconds, track: $0.element.track)
                 }
-
-                guard blocks.count == prepared.chunks.count,
-                      zip(blocks, prepared.chunks).allSatisfy({ $0.track == $1.track }) else { throw ProcessingError.incompleteCoverage }
+                // Whole-file speech checkpoints cannot be paired with chat-model audio windows.
+                if let saved = try loadBlocks(in: directory), saved.count == plan.count,
+                   zip(saved, plan).allSatisfy({ $0.track == $1.track && $0.startSeconds == $1.startSeconds && $0.endSeconds == $1.endSeconds }) {
+                    blocks = saved
+                } else {
+                    blocks = plan
+                }
                 let client = client
                 let chunks = prepared.chunks
                 blocks = try await TranscriptionBatch.run(blocks: blocks) { index in
@@ -227,6 +231,7 @@ struct MeetingProcessor {
         } catch {
             if error is CancellationError { throw error }
             if case ProviderError.authentication = error { throw error }
+            if case SpeechError.authentication = error { throw error }
             if case ProviderError.configuration = error { throw error }
             let saved = try loadBlocks(in: directory) ?? initial
             var split: [TranscriptBlock] = []

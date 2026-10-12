@@ -1,0 +1,25 @@
+name: macOS build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and ad-hoc sign
+        run: scripts/build-app.sh
+      - name: Archive app
+        run: ditto -c -k --sequesterRsrc --keepParent .build/MeetingLog.app .build/MeetingLog-macOS-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MeetingLog-macOS-arm64
+          path: .build/MeetingLog-macOS-arm64.zip
+          include-hidden-files: true
+          if-no-files-found: error

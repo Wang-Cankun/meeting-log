@@ -1,6 +1,93 @@
 // Appended to AppModel.swift by check.sh so the check exercises private queue state
 // without adding test hooks to the shipping app.
 extension AppModel {
+    @MainActor static func checkSettingsConfiguration() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "settings-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults.standard
+        let domain = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName
+        let saved = defaults.persistentDomain(forName: domain) ?? [:]
+        defer {
+            defaults.setPersistentDomain(saved, forName: domain)
+            defaults.removeVolatileDomain(forName: UserDefaults.argumentDomain)
+        }
+        for (key, value) in [
+            ArchiveStore.rootDefaultsKey: root.path, "providerAPIKey": "", "providerModel": "",
+            "speechEndpoint": "", "speechAPIKey": ""
+        ] { defaults.set(value, forKey: key) }
+        let model = AppModel(startsServices: false)
+        precondition(!model.providerReady)
+        let restoreSessions = SettingsFixture.interceptDefaultSessions()
+        defer { restoreSessions() }
+        SettingsFixture.state.withLock { $0 = .init(rejectSpeech: true) }
+
+        await model.testProcessingConfiguration(baseURL: "https://settings.invalid/v1", modelID: "text-only", key: "fixture",
+                                                useSpeech: true, speechEndpoint: "https://settings.invalid", speechKey: "fixture")
+        precondition(!model.providerReady && model.apiKey.isEmpty && model.speechTranscriber == nil,
+                     "A failed speech test must not partially save or enable the text provider")
+        precondition(model.configurationStatus?.contains("Azure Speech") == true, model.configurationStatus ?? "Missing status")
+        precondition(SettingsFixture.state.withLock { $0.requests } == ["text", "speech"])
+
+        SettingsFixture.state.withLock { $0.rejectSpeech = false }
+        await model.testProcessingConfiguration(baseURL: " https://settings.invalid/v1 ", modelID: " text-only ", key: " fixture ",
+                                                useSpeech: true, speechEndpoint: " https://settings.invalid ", speechKey: " fixture ")
+        precondition(model.providerReady && model.speechTranscriber != nil && model.configurationStatus == "Connected")
+        precondition(defaults.string(forKey: "providerModel") == "text-only" && defaults.string(forKey: "speechAPIKey") == "fixture",
+                     "Both saved services must survive reloading")
+        let reloaded = AppModel(startsServices: false)
+        precondition(reloaded.selectedModelID == "text-only" && reloaded.speechTranscriber?.apiKey == "fixture",
+                     "A new app instance must load both saved services")
+
+        let store = ArchiveStore(root: root)
+        let (directory, manifest) = try store.createPendingSession(videoEnabled: false, microphoneID: nil)
+        let silence = root.appending(path: "silence.flac")
+        try MediaProcessor.encodeSilence(seconds: 2, destination: silence)
+        try MediaProcessor.encodeSpeech(source: silence, destination: directory.appending(path: "original.m4a"))
+        SettingsFixture.state.withLock { $0.rejectSpeech = true }
+        await model.resumePendingSessions()
+        await model.processingTask?.value
+        precondition(model.keySaved && model.providerReady, "Speech authentication must not invalidate the summary provider")
+        precondition(model.configurationStatus?.contains("Azure Speech") == true, model.configurationStatus ?? "Missing status")
+        precondition(FileManager.default.fileExists(atPath: directory.appending(path: "original.m4a").path))
+        let failed = try store.pendingSessions()
+        precondition(failed.first?.1.id == manifest.id && failed.first?.1.status == .failed)
+
+        SettingsFixture.state.withLock { $0.rejectSpeech = false }
+        await model.testProcessingConfiguration(baseURL: model.providerBaseURL, modelID: model.selectedModelID, key: model.apiKey,
+                                                useSpeech: true, speechEndpoint: model.speechEndpoint, speechKey: "repaired")
+        await model.processingTask?.value
+        let remaining = try store.pendingSessions()
+        let completed = try store.recentMeetings()
+        precondition(remaining.isEmpty && completed.count == 1, "Saving a repaired service must resume the failed recording: \(model.pendingFailureText ?? "")")
+        precondition(FileManager.default.fileExists(atPath: completed[0].url.appending(path: "summary_cn.md").path))
+        precondition(!SettingsFixture.state.withLock { $0.requests.contains("audio") }, "MAI mode must never upload audio to the text provider")
+
+        await model.testProcessingConfiguration(baseURL: model.providerBaseURL, modelID: "text-only", key: model.apiKey,
+                                                useSpeech: false, speechEndpoint: "", speechKey: "")
+        precondition(model.configurationStatus?.contains("Audio input test failed") == true)
+        precondition(model.speechTranscriber?.apiKey == "repaired" && defaults.string(forKey: "speechAPIKey") == "repaired",
+                     "An unsupported audio model must preserve the working configuration")
+        let (longDirectory, _) = try store.createPendingSession(videoEnabled: false, microphoneID: nil)
+        try MediaProcessor.encodeSilence(seconds: 601, destination: silence)
+        try MediaProcessor.encodeSpeech(source: silence, destination: longDirectory.appending(path: "original.m4a"))
+        SettingsFixture.state.withLock { $0.rejectSpeech = true }
+        await model.resumePendingSessions()
+        await model.processingTask?.value
+        SettingsFixture.state.withLock { $0.rejectSpeech = false }
+        await model.testProcessingConfiguration(baseURL: model.providerBaseURL, modelID: "audio-model", key: model.apiKey,
+                                                useSpeech: false, speechEndpoint: "", speechKey: "")
+        await model.processingTask?.value
+        let switchedPending = try store.pendingSessions()
+        let switchedMeetings = try store.recentMeetings()
+        precondition(switchedPending.isEmpty && switchedMeetings.count == 2,
+                     "Switching from a whole-file speech request to audio windows must recover without deleting files: \(model.pendingFailureText ?? "")")
+        precondition(model.configurationStatus == "Connected" && model.providerReady && model.speechTranscriber == nil)
+        precondition(defaults.string(forKey: "speechAPIKey") == "")
+        model.removeProviderConfiguration()
+        precondition(!model.providerReady && model.speechTranscriber == nil && defaults.string(forKey: "providerAPIKey") == nil)
+        print("Settings passed: all-or-nothing save, reload, MAI routing, authentication recovery, audio capability, switch and removal")
+    }
+
     @MainActor static func checkCaptureRecoveryPresentation() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "capture-state-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

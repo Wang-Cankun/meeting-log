@@ -6,10 +6,12 @@ MeetingLog is a personal macOS menu bar app that records all Mac audio or one ap
 
 1. Run `scripts/build-app.sh` on macOS 26 or later.
 2. Open `.build/MeetingLog.app`.
-3. Open Settings to choose an archive root and create project folders, then pick the destination project in the menu bar panel. Configure the AI provider in Settings when transcription is needed. Optionally add an Azure Speech endpoint and key; MAI-Transcribe-2 then transcribes each recording in one request and the provider only writes summaries.
+3. Open Settings to choose an archive root and create project folders, then pick the destination project in the menu bar panel. New installations default to `~/Documents/MeetingLog`; existing archive locations are kept. In **AI processing**, choose **AI provider** for a model that accepts audio, or **Azure Speech · MAI-Transcribe-2** and enter your Speech resource endpoint and key. Enter the summary provider's OpenAI-compatible base URL, model ID, and key, then click **Test & save** once for the entire configuration.
 4. Grant system-audio permission. Grant microphone or screen-recording permission only when enabling those sources.
 
 The destination project stays locked while starting, recording, and stopping. If the selected audio application closes, it stays selected and recording is blocked until it returns or you choose another source. MeetingLog never changes that selection to all Mac audio automatically.
+
+Settings tests JSON output and sends one second of generated silence to the selected transcription service. Both services must pass before any configuration changes are saved or pending recordings resume. Failed tests keep your previous configuration. With MAI, the summary model needs text support only; without MAI, its audio input is tested too. You always need a summary provider. All of this setup is available in Settings, with no configuration files or shell commands. Changing the transcription selection takes effect after **Test & save** succeeds.
 
 Failed recordings stay local. **Retry** resumes their recovery, and **Show files** opens the pending recordings, even when a disk error prevented saving the failure status. If recovery can use only system audio, the completed meeting shows a partial-recovery warning and keeps both original tracks for manual recovery.
 
@@ -21,6 +23,11 @@ Failed recordings stay local. **Retry** resumes their recovery, and **Show files
 | Where do capture, processing, and storage connect? | `docs/architecture.md` |
 | Why were the current boundaries chosen? | `docs/decisions.md` |
 | What is implemented next? | `docs/plan.md` |
+| What changed in this release? | `docs/release-notes.md` |
+
+## Build and distribution
+
+Local macOS and CI builds use the same `scripts/build-app.sh` script and free ad-hoc signing by default. No Apple account, Developer ID certificate, or signing secrets are needed. The GitHub Actions build produces `MeetingLog-macOS-arm64.zip`, preserving the signed app bundle and executable permissions. These builds are not notarized; macOS may require approval in System Settings → Privacy & Security on first launch after download. Signing is free; AI provider usage and any applicable CI runner charges are separate.
 
 ## Import an iPhone recording
 

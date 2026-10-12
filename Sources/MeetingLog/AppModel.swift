@@ -35,13 +35,11 @@ final class AppModel: ObservableObject {
     @Published var providerBaseURL = UserDefaults.standard.string(forKey: "providerBaseURL") ?? "https://openrouter.ai/api/v1"
     @Published var apiKey = UserDefaults.standard.string(forKey: "providerAPIKey") ?? ""
     @Published var keySaved = false
-    @Published var providerStatus: String?
-    @Published var isVerifyingProvider = false
-    @Published var selectedModelID = UserDefaults.standard.string(forKey: "providerModel") ?? "google/gemini-3.8-flash"
+    @Published var configurationStatus: String?
+    @Published var isVerifyingConfiguration = false
+    @Published var selectedModelID = UserDefaults.standard.string(forKey: "providerModel") ?? ""
     @Published var speechEndpoint = UserDefaults.standard.string(forKey: "speechEndpoint") ?? ""
     @Published var speechKey = UserDefaults.standard.string(forKey: "speechAPIKey") ?? ""
-    @Published var speechStatus: String?
-    @Published var isVerifyingSpeech = false
     @Published var archiveRootPath = UserDefaults.standard.string(forKey: ArchiveStore.rootDefaultsKey) ?? AppModel.defaultArchiveURL.path
     @Published var applications: [CaptureApplication] = []
     @Published var selectedSystemAudioBundleID: String?
@@ -145,7 +143,7 @@ final class AppModel: ObservableObject {
     var isProcessing: Bool { processingCount > 0 }
 
     /// A saved key and a chosen model: new and pending recordings process instead of waiting.
-    var providerReady: Bool { keySaved && !selectedModelID.isEmpty }
+    var providerReady: Bool { keySaved && !selectedModelID.isEmpty && !isVerifyingConfiguration }
 
     var hasScreenSource: Bool { selectedScreenSource != nil }
 
@@ -210,27 +208,47 @@ final class AppModel: ObservableObject {
         setArchiveRoot(url)
     }
 
-    func testProviderConfiguration(baseURL: String, modelID: String, key: String) async {
-        guard !isVerifyingProvider else { return }
+    func testProcessingConfiguration(baseURL: String, modelID: String, key: String,
+                                     useSpeech: Bool, speechEndpoint: String, speechKey: String) async {
+        guard !isVerifyingConfiguration, !isRecording, !isChangingRecording, !isProcessing, !isImporting else { return }
         let baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = useSpeech ? speechEndpoint.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let speechKey = useSpeech ? speechKey.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         guard !baseURL.isEmpty, !modelID.isEmpty, !key.isEmpty else {
-            providerStatus = "Complete all provider fields."
+            configurationStatus = "Complete the AI provider URL, model, and API key."
             return
         }
-        isVerifyingProvider = true
-        defer { isVerifyingProvider = false }
+        guard !useSpeech || (!endpoint.isEmpty && !speechKey.isEmpty) else {
+            configurationStatus = "Complete the Azure Speech endpoint and key, or choose AI provider for transcription."
+            return
+        }
+        isVerifyingConfiguration = true
+        defer { isVerifyingConfiguration = false }
+        var service = "AI provider"
         do {
-            try await ProviderClient(baseURL: baseURL, apiKey: key, model: modelID).verifyConfiguration()
+            configurationStatus = "Testing AI provider…"
+            try await ProviderClient(baseURL: baseURL, apiKey: key, model: modelID).verifyConfiguration(includingAudio: !useSpeech)
+            if useSpeech {
+                service = "Azure Speech"
+                configurationStatus = "Testing Azure Speech…"
+                try await SpeechTranscriber(endpoint: endpoint, apiKey: speechKey).verifyConfiguration()
+            }
+            // Commit both services before pending jobs can snapshot the configuration.
             providerBaseURL = baseURL
             selectedModelID = modelID
             apiKey = key
+            self.speechEndpoint = endpoint
+            self.speechKey = speechKey
+            UserDefaults.standard.set(endpoint, forKey: "speechEndpoint")
+            UserDefaults.standard.set(speechKey, forKey: "speechAPIKey")
             saveProviderConfiguration()
-            providerStatus = "Connected"
+            configurationStatus = "Connected"
+            isVerifyingConfiguration = false
             await resumePendingSessions()
         } catch {
-            providerStatus = error.localizedDescription
+            configurationStatus = "\(service): \(error.localizedDescription) Configuration was not changed."
         }
     }
 
@@ -239,42 +257,16 @@ final class AppModel: ObservableObject {
         speechEndpoint.isEmpty || speechKey.isEmpty ? nil : SpeechTranscriber(endpoint: speechEndpoint, apiKey: speechKey)
     }
 
-    func testSpeechConfiguration(endpoint: String, key: String) async {
-        guard !isVerifyingSpeech else { return }
-        let endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !endpoint.isEmpty, !key.isEmpty else {
-            speechStatus = "Complete both speech fields."
-            return
-        }
-        isVerifyingSpeech = true
-        defer { isVerifyingSpeech = false }
-        do {
-            try await SpeechTranscriber(endpoint: endpoint, apiKey: key).verifyConfiguration()
-            speechEndpoint = endpoint
-            speechKey = key
-            UserDefaults.standard.set(endpoint, forKey: "speechEndpoint")
-            UserDefaults.standard.set(key, forKey: "speechAPIKey")
-            speechStatus = "Connected"
-        } catch {
-            speechStatus = error.localizedDescription
-        }
-    }
-
-    func removeSpeechConfiguration() {
+    func removeProviderConfiguration() {
+        guard !isVerifyingConfiguration, !isRecording, !isChangingRecording, !isProcessing, !isImporting else { return }
+        providerBaseURL = "https://openrouter.ai/api/v1"
+        selectedModelID = ""
+        apiKey = ""
         speechEndpoint = ""
         speechKey = ""
-        speechStatus = "Speech service removed"
-        for key in ["speechEndpoint", "speechAPIKey"] { UserDefaults.standard.removeObject(forKey: key) }
-    }
-
-    func removeProviderConfiguration() {
-        providerBaseURL = "https://openrouter.ai/api/v1"
-        selectedModelID = "google/gemini-3.8-flash"
-        apiKey = ""
         keySaved = false
-        providerStatus = "Configuration removed"
-        for key in ["providerName", "providerBaseURL", "providerModel", "providerAPIKey"] {
+        configurationStatus = nil
+        for key in ["providerName", "providerBaseURL", "providerModel", "providerAPIKey", "speechEndpoint", "speechAPIKey"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         refreshPendingStatus()
@@ -875,7 +867,13 @@ final class AppModel: ObservableObject {
                 let title = recentMeetings.first { $0.url.standardizedFileURL == destination.standardizedFileURL }?.title
                 MeetingNotifications.post(title: "Meeting ready", body: title ?? destination.lastPathComponent, folder: destination)
             } catch {
-                if case ProviderError.authentication = error { keySaved = false }
+                if case ProviderError.authentication = error {
+                    keySaved = false
+                    configurationStatus = "AI provider: \(error.localizedDescription) Update it in Settings."
+                }
+                if case SpeechError.authentication = error {
+                    configurationStatus = error.localizedDescription
+                }
                 processingErrors[job.directory.path] = error.localizedDescription
                 MeetingNotifications.post(title: "Processing needs attention",
                                           body: "The recording is saved locally. \(error.localizedDescription)", folder: nil)
@@ -1022,7 +1020,7 @@ final class AppModel: ObservableObject {
     }
 
     private static let defaultArchiveURL = FileManager.default.homeDirectoryForCurrentUser
-        .appending(path: "Library/CloudStorage/Dropbox/Obsidian/meeting-log", directoryHint: .isDirectory)
+        .appending(path: "Documents/MeetingLog", directoryHint: .isDirectory)
 }
 
 private struct ProcessingJob {

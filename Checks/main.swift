@@ -1,6 +1,8 @@
 import Foundation
 import AVFoundation
 
+try await checkProviderSetup()
+
 // Completed meeting moves preserve media/history and change only project metadata.
 do {
     let fm = FileManager.default

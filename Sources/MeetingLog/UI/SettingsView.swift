@@ -7,7 +7,7 @@ struct SettingsView: View {
     @State private var baseURL = ""
     @State private var modelID = ""
     @State private var key = ""
-    @State private var testResult: String?
+    @State private var useSpeech = false
     @State private var speechEndpoint = ""
     @State private var speechKey = ""
     @State private var confirmingRemoval = false
@@ -46,13 +46,13 @@ struct SettingsView: View {
         .onAppear {
             model.settingsDidOpen()
             loadSavedProvider()
+            if !model.providerReady { page = .provider }
         }
         .sheet(isPresented: $showingProject) { NewProjectSheet(model: model) }
         .confirmationDialog("Remove the saved AI configuration?", isPresented: $confirmingRemoval) {
             Button("Remove configuration", role: .destructive) {
                 model.removeProviderConfiguration()
                 loadSavedProvider()
-                testResult = nil
             }
         } message: {
             Text("Existing meetings stay in your archive. New recordings will wait locally until you configure a provider again.")
@@ -130,102 +130,114 @@ struct SettingsView: View {
     private var provider: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("AI provider").font(.title2.weight(.semibold))
-                Text("Connect a provider to transcribe audio and write meeting summaries.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                Text("AI processing").font(.title2.weight(.semibold))
+                Text("Choose how to transcribe audio, then connect the provider that writes your summaries.")
+                    .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(alignment: .leading, spacing: 18) {
-                field("API base URL", hint: "OpenAI-compatible HTTPS endpoint") {
-                    TextField("", text: draft($baseURL),
-                              prompt: Text("https://openrouter.ai/api/v1"))
+                Picker("Transcription", selection: draft($useSpeech)) {
+                    Text("AI provider").tag(false)
+                    Text("Azure Speech · \(SpeechTranscriber.model)").tag(true)
                 }
-                field("Model", hint: "Must support audio input unless a speech service is set below.") {
-                    TextField("", text: draft($modelID),
-                              prompt: Text("Provider model ID"))
+                if useSpeech {
+                    Text("Audio goes to Azure Speech. Only transcript text goes to the AI provider below.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    field("Speech endpoint", hint: "Resource root URL from Azure, without /speechtotext or an API version.") {
+                        TextField("", text: draft($speechEndpoint),
+                                  prompt: Text("https://<resource>.cognitiveservices.azure.com"))
+                    }
+                    field("Speech key", hint: "Key for this Azure Speech or AI Services resource.") {
+                        SecureField("", text: draft($speechKey), prompt: Text("Paste the resource key"))
+                    }
+                } else {
+                    Text("The AI provider below handles both audio transcription and summaries. Choose a model that accepts audio input.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Divider()
+                Text(useSpeech ? "Summary provider" : "Transcription & summary provider").font(.headline)
+                field("API base URL", hint: "OpenAI-compatible HTTPS base URL, without /chat/completions.") {
+                    TextField("", text: draft($baseURL), prompt: Text("https://openrouter.ai/api/v1"))
+                }
+                field("Model", hint: useSpeech ? "Text model or deployment ID that supports JSON output." : "Model ID that supports audio input and JSON output.") {
+                    TextField("", text: draft($modelID), prompt: Text("Your provider's model ID"))
                 }
                 field("API key", hint: nil) {
                     SecureField("", text: draft($key), prompt: Text("Paste your API key"))
                 }
             }
-            .disabled(model.isVerifyingProvider)
+            .disabled(model.isVerifyingConfiguration)
 
             VStack(alignment: .leading, spacing: 12) {
-                if model.isVerifyingProvider {
+                if model.isVerifyingConfiguration {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("Testing connection…").foregroundStyle(.secondary)
+                        Text(model.configurationStatus ?? "Testing…").foregroundStyle(.secondary)
                     }
                 } else {
                     Label(statusText, systemImage: statusSymbol)
                         .font(.callout)
-                        .foregroundStyle(statusColor)
+                        .foregroundStyle(model.configurationStatus == "Connected" ? .green : .secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-
                 HStack(spacing: 10) {
-                    if model.keySaved {
-                        Button("Remove provider…", role: .destructive) { confirmingRemoval = true }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.secondary)
-                            .disabled(model.isVerifyingProvider || archiveBusy)
+                    if !model.apiKey.isEmpty || model.speechTranscriber != nil {
+                        Button("Remove configuration…", role: .destructive) { confirmingRemoval = true }
+                            .buttonStyle(.borderless).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if hasEdits && model.keySaved {
-                        Button("Revert") { loadSavedProvider(); testResult = nil }
-                            .disabled(model.isVerifyingProvider)
+                    if hasEdits {
+                        Button("Revert") { loadSavedProvider(); model.configurationStatus = nil }
                     }
-                    Button(hasEdits || !model.keySaved ? "Test & save" : "Test connection") {
+                    Button("Test & save") {
                         Task {
-                            await model.testProviderConfiguration(baseURL: baseURL, modelID: modelID, key: key)
-                            testResult = model.providerStatus
-                            if testResult == "Connected" { loadSavedProvider() }
+                            await model.testProcessingConfiguration(
+                                baseURL: baseURL, modelID: modelID, key: key,
+                                useSpeech: useSpeech, speechEndpoint: speechEndpoint, speechKey: speechKey
+                            )
+                            if model.configurationStatus == "Connected" { loadSavedProvider() }
                         }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(!complete || model.isVerifyingProvider || archiveBusy)
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .disabled(!complete)
+                }
+                .disabled(model.isVerifyingConfiguration || archiveBusy)
+                Text("Testing sends a short text request and one second of generated silence to the selected services. Both must pass before saving resumes pending recordings.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if archiveBusy {
+                    Text("Wait for recording, importing, and processing to finish before saving changes.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .padding(.top, 2)
-
-            Divider()
-            speech
 
             Divider()
             DisclosureGroup("How processing & storage work", isExpanded: $showingDetails) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Audio is sent to the speech service when one is saved, otherwise to this provider. Without a saved provider, recordings wait locally.")
-                    Text("Testing sends a short text request, not audio. Saving resumes pending recordings.")
-                    Text("The API key is stored unencrypted in your local app preferences.")
+                    Text("Without a saved AI configuration, recordings wait locally. You need a summary provider even when Azure Speech handles transcription.")
+                    Text("API keys are stored unencrypted in your local app preferences.")
+                    Text("Each meeting includes its transcript, a summary, a Simplified Chinese summary, and a short Chinese folder title.")
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 8)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
             }
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            .font(.callout).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var statusSymbol: String {
-        if let testResult { return testResult == "Connected" ? "checkmark.circle.fill" : "exclamationmark.circle" }
-        return hasEdits ? "pencil.circle" : (model.keySaved ? "checkmark.circle" : "info.circle")
+        if let status = model.configurationStatus {
+            return status == "Connected" ? "checkmark.circle.fill" : "exclamationmark.circle"
+        }
+        return hasEdits ? "pencil.circle" : (model.providerReady ? "checkmark.circle" : "info.circle")
     }
 
-    private var statusColor: Color {
-        if let testResult { return testResult == "Connected" ? .green : .orange }
-        return .secondary
-    }
-
-    private func draft(_ value: Binding<String>) -> Binding<String> {
+    private func draft<Value>(_ value: Binding<Value>) -> Binding<Value> {
         Binding(get: { value.wrappedValue }, set: {
             value.wrappedValue = $0
-            testResult = nil
+            model.configurationStatus = nil
         })
     }
 
@@ -233,74 +245,32 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title).font(.subheadline.weight(.medium))
             content()
-                .labelsHidden()
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.large)
-                .font(.system(.body, design: .monospaced))
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity)
-                .accessibilityLabel(title)
+                .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large)
+                .font(.system(.body, design: .monospaced)).multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity).accessibilityLabel(title)
             if let hint { Text(hint).font(.caption).foregroundStyle(.secondary) }
         }
     }
 
-    private var speech: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Speech transcription (optional)").font(.headline)
-                Text("Azure Speech with \(SpeechTranscriber.model) transcribes each recording in one request with speaker separation. The provider above then handles text only.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            field("Speech endpoint", hint: "Azure AI Services or Speech resource URL") {
-                TextField("", text: $speechEndpoint, prompt: Text("https://<resource>.cognitiveservices.azure.com"))
-            }
-            field("Speech key", hint: nil) {
-                SecureField("", text: $speechKey, prompt: Text("Paste the resource key"))
-            }
-            HStack(spacing: 10) {
-                if model.isVerifyingSpeech {
-                    ProgressView().controlSize(.small)
-                    Text("Testing…").foregroundStyle(.secondary)
-                } else if let status = model.speechStatus {
-                    Text(status == "Connected" ? "Speech service verified and saved." : status)
-                        .font(.callout)
-                        .foregroundStyle(status == "Connected" ? .green : .secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                if model.speechTranscriber != nil {
-                    Button("Remove", role: .destructive) {
-                        model.removeSpeechConfiguration()
-                        speechEndpoint = ""
-                        speechKey = ""
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(model.isVerifyingSpeech || archiveBusy)
-                }
-                Button("Test & save") {
-                    Task { await model.testSpeechConfiguration(endpoint: speechEndpoint, key: speechKey) }
-                }
-                .disabled(speechEndpoint.isEmpty || speechKey.isEmpty || model.isVerifyingSpeech || archiveBusy)
-            }
-        }
-        .disabled(model.isVerifyingProvider)
-    }
-
     private var statusText: String {
-        if let testResult {
-            return testResult == "Connected" ? "Connection verified. Configuration saved." : testResult
+        if let status = model.configurationStatus {
+            return status == "Connected" ? "Services verified. Configuration saved." : status
         }
-        if hasEdits { return "Unsaved changes" }
-        return model.keySaved ? "Configuration saved." : "Add a provider when you’re ready to process audio."
+        if hasEdits { return "Unsaved changes. Pending recordings use the saved configuration." }
+        if !model.providerReady { return "Complete the fields above to enable processing." }
+        return model.speechTranscriber != nil
+            ? "Saved: \(SpeechTranscriber.model) for transcription; \(model.selectedModelID) for summaries."
+            : "Saved: \(model.selectedModelID) for transcription and summaries."
     }
 
     private var hasEdits: Bool {
         baseURL != model.providerBaseURL || modelID != model.selectedModelID || key != model.apiKey
+            || useSpeech != (model.speechTranscriber != nil)
+            || (useSpeech && (speechEndpoint != model.speechEndpoint || speechKey != model.speechKey))
     }
     private var complete: Bool {
-        [baseURL, modelID, key].allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let fields = [baseURL, modelID, key] + (useSpeech ? [speechEndpoint, speechKey] : [])
+        return fields.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
     private var archiveBusy: Bool {
         model.isRecording || model.isChangingRecording || model.isProcessing || model.isImporting
@@ -311,6 +281,7 @@ struct SettingsView: View {
         key = model.apiKey
         speechEndpoint = model.speechEndpoint
         speechKey = model.speechKey
+        useSpeech = model.speechTranscriber != nil
     }
 }
 

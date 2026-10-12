@@ -276,14 +276,15 @@ struct MediaProcessor {
     }
 
     static func encodeSilence(seconds: Double, destination: URL) throws {
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1),
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(seconds * 16_000)) else {
             throw MediaError.exportUnavailable
         }
         buffer.frameLength = buffer.frameCapacity
+        buffer.int16ChannelData![0].update(repeating: 0, count: Int(buffer.frameLength))
         let output = try AVAudioFile(forWriting: destination, settings: [
             AVFormatIDKey: kAudioFormatFLAC, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1
-        ])
+        ], commonFormat: .pcmFormatInt16, interleaved: true)
         try output.write(from: buffer)
     }
 

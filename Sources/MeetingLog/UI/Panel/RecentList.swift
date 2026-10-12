@@ -115,7 +115,7 @@ private struct PendingItemCard: View {
                 .padding(12)
             }
         case .waitingForProvider:
-            noticeCard(symbol: "tray.full", text: "Configure an AI provider to process this recording.",
+            noticeCard(symbol: "tray.full", text: "Set up processing in Settings to process this recording.",
                        retry: false, settings: true)
         case .needsRetry:
             noticeCard(symbol: "tray.full", text: "Saved locally, not processed yet.",
@@ -201,7 +201,7 @@ private struct PendingItemCard: View {
                 .help("Show this recording's saved files in Finder")
             if settings {
                 Button("Settings", action: showSettings)
-                    .help("Configure an AI provider")
+                    .help("Set up processing in Settings")
             }
         }
         .controlSize(.regular)

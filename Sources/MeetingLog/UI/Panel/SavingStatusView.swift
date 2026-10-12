@@ -52,7 +52,7 @@ struct SavingStatusView: View {
 
             Text(model.providerReady
                  ? "You can close this panel. MeetingLog keeps saving and will notify you when the meeting is ready."
-                 : "You can close this panel. The recording will wait in Recent until an AI provider is configured.")
+                 : "You can close this panel. The recording will wait in Recent until processing is set up in Settings.")
                 .font(.subheadline)
                 .lineSpacing(2)
                 .foregroundStyle(.secondary)

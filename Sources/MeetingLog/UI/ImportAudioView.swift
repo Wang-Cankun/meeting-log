@@ -108,11 +108,11 @@ struct ImportAudioView: View {
                     .font(.callout).foregroundStyle(.orange).textSelection(.enabled)
             }
             if imported {
-                Label(model.providerReady ? "Meeting imported. Processing continues in MeetingLog." : "Meeting saved locally. Set up an AI provider in Settings to process it.", systemImage: "checkmark.circle.fill")
+                Label(model.providerReady ? "Meeting imported. Processing continues in MeetingLog." : "Meeting saved locally. Set up processing in Settings to process it.", systemImage: "checkmark.circle.fill")
                     .font(.callout).foregroundStyle(.green)
             }
             HStack {
-                Text(imported ? "You can close this window or start another meeting." : (model.providerReady ? "Audio is sent to your configured AI provider." : "Audio will wait locally until an AI provider is configured."))
+                Text(imported ? "You can close this window or start another meeting." : (model.providerReady ? "Audio is sent to your configured transcription service." : "Audio will wait locally until processing is set up in Settings."))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 12)
                 if model.isImporting { ProgressView().controlSize(.small) }

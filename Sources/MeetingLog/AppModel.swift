@@ -40,6 +40,7 @@ final class AppModel: ObservableObject {
     @Published var selectedModelID = UserDefaults.standard.string(forKey: "providerModel") ?? ""
     @Published var speechEndpoint = UserDefaults.standard.string(forKey: "speechEndpoint") ?? ""
     @Published var speechKey = UserDefaults.standard.string(forKey: "speechAPIKey") ?? ""
+    @Published var summariesEnabled = UserDefaults.standard.object(forKey: "summariesEnabled") as? Bool ?? true
     @Published var archiveRootPath = UserDefaults.standard.string(forKey: ArchiveStore.rootDefaultsKey) ?? AppModel.defaultArchiveURL.path
     @Published var applications: [CaptureApplication] = []
     @Published var selectedSystemAudioBundleID: String?
@@ -142,8 +143,16 @@ final class AppModel: ObservableObject {
 
     var isProcessing: Bool { processingCount > 0 }
 
-    /// A saved key and a chosen model: new and pending recordings process instead of waiting.
-    var providerReady: Bool { keySaved && !selectedModelID.isEmpty && !isVerifyingConfiguration }
+    /// The saved configuration can process recordings: a summary model when AI summaries are on, otherwise Azure Speech.
+    var providerReady: Bool {
+        guard !isVerifyingConfiguration else { return false }
+        return summariesEnabled ? keySaved && !selectedModelID.isEmpty : speechTranscriber != nil
+    }
+
+    /// Off means MeetingLog never contacts a language model, including Regenerate with a key saved earlier.
+    var canGenerateSummaries: Bool {
+        summariesEnabled && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var hasScreenSource: Bool { selectedScreenSource != nil }
 
@@ -208,42 +217,55 @@ final class AppModel: ObservableObject {
         setArchiveRoot(url)
     }
 
+    /// Saves only after every selected service passes. With AI summaries off, only Azure Speech is tested and saved;
+    /// the saved summary provider stays as it was for when summaries are turned back on.
     func testProcessingConfiguration(baseURL: String, modelID: String, key: String,
-                                     useSpeech: Bool, speechEndpoint: String, speechKey: String) async {
+                                     useSpeech: Bool, speechEndpoint: String, speechKey: String,
+                                     summaries: Bool = true) async {
         guard !isVerifyingConfiguration, !isRecording, !isChangingRecording, !isProcessing, !isImporting else { return }
+        // Without a summary model, Azure Speech is the only service that can transcribe.
+        let useSpeech = useSpeech || !summaries
         let baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
         let endpoint = useSpeech ? speechEndpoint.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         let speechKey = useSpeech ? speechKey.trimmingCharacters(in: .whitespacesAndNewlines) : ""
-        guard !baseURL.isEmpty, !modelID.isEmpty, !key.isEmpty else {
+        guard !summaries || (!baseURL.isEmpty && !modelID.isEmpty && !key.isEmpty) else {
             configurationStatus = "Complete the AI provider URL, model, and API key."
             return
         }
         guard !useSpeech || (!endpoint.isEmpty && !speechKey.isEmpty) else {
-            configurationStatus = "Complete the Azure Speech endpoint and key, or choose AI provider for transcription."
+            configurationStatus = summaries
+                ? "Complete the Azure Speech endpoint and key, or choose AI provider for transcription."
+                : "Complete the Azure Speech endpoint and key."
             return
         }
         isVerifyingConfiguration = true
         defer { isVerifyingConfiguration = false }
         var service = "AI provider"
         do {
-            configurationStatus = "Testing AI provider…"
-            try await ProviderClient(baseURL: baseURL, apiKey: key, model: modelID).verifyConfiguration(includingAudio: !useSpeech)
+            if summaries {
+                configurationStatus = "Testing AI provider…"
+                try await ProviderClient(baseURL: baseURL, apiKey: key, model: modelID).verifyConfiguration(includingAudio: !useSpeech)
+            }
             if useSpeech {
                 service = "Azure Speech"
                 configurationStatus = "Testing Azure Speech…"
                 try await SpeechTranscriber(endpoint: endpoint, apiKey: speechKey).verifyConfiguration()
             }
-            // Commit both services before pending jobs can snapshot the configuration.
-            providerBaseURL = baseURL
-            selectedModelID = modelID
-            apiKey = key
+            // Commit every service before pending jobs can snapshot the configuration.
+            if summaries {
+                providerBaseURL = baseURL
+                selectedModelID = modelID
+                apiKey = key
+                saveProviderConfiguration()
+            }
             self.speechEndpoint = endpoint
             self.speechKey = speechKey
+            summariesEnabled = summaries
             UserDefaults.standard.set(endpoint, forKey: "speechEndpoint")
             UserDefaults.standard.set(speechKey, forKey: "speechAPIKey")
-            saveProviderConfiguration()
+            UserDefaults.standard.set(summaries, forKey: "summariesEnabled")
             configurationStatus = "Connected"
             isVerifyingConfiguration = false
             await resumePendingSessions()
@@ -264,9 +286,11 @@ final class AppModel: ObservableObject {
         apiKey = ""
         speechEndpoint = ""
         speechKey = ""
+        summariesEnabled = true
         keySaved = false
         configurationStatus = nil
-        for key in ["providerName", "providerBaseURL", "providerModel", "providerAPIKey", "speechEndpoint", "speechAPIKey"] {
+        for key in ["providerName", "providerBaseURL", "providerModel", "providerAPIKey", "speechEndpoint", "speechAPIKey",
+                    "summariesEnabled"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         refreshPendingStatus()
@@ -777,7 +801,7 @@ final class AppModel: ObservableObject {
         if providerReady {
             enqueue(ProcessingJob(directory: directory, manifest: manifest, store: store,
                                   baseURL: providerBaseURL, key: apiKey, model: selectedModelID,
-                                  speech: speechTranscriber, projectName: manifest.projectName))
+                                  speech: speechTranscriber, summaries: summariesEnabled, projectName: manifest.projectName))
         }
     }
 
@@ -834,6 +858,7 @@ final class AppModel: ObservableObject {
                 key: apiKey,
                 model: selectedModelID,
                 speech: speechTranscriber,
+                summaries: summariesEnabled,
                 projectName: manifest.projectName ?? selectedProjectName
             ))
         }
@@ -889,19 +914,18 @@ final class AppModel: ObservableObject {
 
     private func process(_ job: ProcessingJob) async throws -> URL {
         let path = job.directory.path
-        processingProgress = ProcessingProgress(stage: .prepare, detail: "Preparing")
+        let summaries = job.summaries
+        processingProgress = ProcessingProgress(stage: .prepare, detail: "Preparing", summaries: summaries)
         let processor = MeetingProcessor(
             store: job.store,
-            client: ProviderClient(
-                baseURL: job.baseURL,
-                apiKey: job.key,
-                model: job.model
-            ),
+            client: job.summaries ? ProviderClient(baseURL: job.baseURL, apiKey: job.key, model: job.model) : nil,
             speech: job.speech
         ) { [weak self] progress in
             Task { @MainActor in
                 // A late callback from a finished job must not overwrite the next job.
                 guard let self, self.currentProcessingPath == path else { return }
+                var progress = progress
+                progress.summaries = summaries
                 self.processingProgress = progress
             }
         }
@@ -1031,6 +1055,9 @@ private struct ProcessingJob {
     let key: String
     let model: String
     var speech: SpeechTranscriber? = nil
+    /// Snapshotted at enqueue time like the other settings; false archives transcripts only.
+    /// Required, so no enqueue path can fall back to sending transcripts to a provider.
+    let summaries: Bool
     let projectName: String?
 }
 

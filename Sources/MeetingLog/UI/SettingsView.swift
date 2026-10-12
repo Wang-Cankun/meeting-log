@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var modelID = ""
     @State private var key = ""
     @State private var useSpeech = false
+    @State private var summaries = true
     @State private var speechEndpoint = ""
     @State private var speechKey = ""
     @State private var confirmingRemoval = false
@@ -55,7 +56,7 @@ struct SettingsView: View {
                 loadSavedProvider()
             }
         } message: {
-            Text("Existing meetings stay in your archive. New recordings will wait locally until you configure a provider again.")
+            Text("Existing meetings stay in your archive. New recordings will wait locally until you set up processing again.")
         }
         .confirmationDialog("Discard pending meetings?", isPresented: $confirmingDiscard) {
             Button("Move to Trash", role: .destructive) { model.discardPendingMeetings() }
@@ -131,18 +132,32 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("AI processing").font(.title2.weight(.semibold))
-                Text("Choose how to transcribe audio, then connect the provider that writes your summaries.")
+                Text(summaries
+                     ? "Choose how to transcribe audio, then connect the provider that writes your summaries."
+                     : "Recordings are transcribed with Azure Speech and saved as transcripts, without summaries.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(alignment: .leading, spacing: 18) {
-                Picker("Transcription", selection: draft($useSpeech)) {
-                    Text("AI provider").tag(false)
-                    Text("Azure Speech · \(SpeechTranscriber.model)").tag(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Toggle("Generate AI summaries", isOn: draft($summaries))
+                    Text(summaries
+                         ? "A language model writes each meeting's summary and Simplified Chinese summary."
+                         : "No language model is used. Each meeting keeps its audio and transcripts.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                if useSpeech {
-                    Text("Audio goes to Azure Speech. Only transcript text goes to the AI provider below.")
+                if summaries {
+                    Picker("Transcription", selection: draft($useSpeech)) {
+                        Text("AI provider").tag(false)
+                        Text("Azure Speech · \(SpeechTranscriber.model)").tag(true)
+                    }
+                }
+                if usesSpeech {
+                    Text(summaries
+                         ? "Audio goes to Azure Speech. Only transcript text goes to the AI provider below."
+                         : "Audio goes to Azure Speech · \(SpeechTranscriber.model). Nothing is sent to a language model.")
                         .font(.caption).foregroundStyle(.secondary)
                     field("Speech endpoint", hint: "Resource root URL from Azure, without /speechtotext or an API version.") {
                         TextField("", text: draft($speechEndpoint),
@@ -155,16 +170,18 @@ struct SettingsView: View {
                     Text("The AI provider below handles both audio transcription and summaries. Choose a model that accepts audio input.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Divider()
-                Text(useSpeech ? "Summary provider" : "Transcription & summary provider").font(.headline)
-                field("API base URL", hint: "OpenAI-compatible HTTPS base URL, without /chat/completions.") {
-                    TextField("", text: draft($baseURL), prompt: Text("https://openrouter.ai/api/v1"))
-                }
-                field("Model", hint: useSpeech ? "Text model or deployment ID that supports JSON output." : "Model ID that supports audio input and JSON output.") {
-                    TextField("", text: draft($modelID), prompt: Text("Your provider's model ID"))
-                }
-                field("API key", hint: nil) {
-                    SecureField("", text: draft($key), prompt: Text("Paste your API key"))
+                if summaries {
+                    Divider()
+                    Text(useSpeech ? "Summary provider" : "Transcription & summary provider").font(.headline)
+                    field("API base URL", hint: "OpenAI-compatible HTTPS base URL, without /chat/completions.") {
+                        TextField("", text: draft($baseURL), prompt: Text("https://openrouter.ai/api/v1"))
+                    }
+                    field("Model", hint: useSpeech ? "Text model or deployment ID that supports JSON output." : "Model ID that supports audio input and JSON output.") {
+                        TextField("", text: draft($modelID), prompt: Text("Your provider's model ID"))
+                    }
+                    field("API key", hint: nil) {
+                        SecureField("", text: draft($key), prompt: Text("Paste your API key"))
+                    }
                 }
             }
             .disabled(model.isVerifyingConfiguration)
@@ -194,7 +211,8 @@ struct SettingsView: View {
                         Task {
                             await model.testProcessingConfiguration(
                                 baseURL: baseURL, modelID: modelID, key: key,
-                                useSpeech: useSpeech, speechEndpoint: speechEndpoint, speechKey: speechKey
+                                useSpeech: usesSpeech, speechEndpoint: speechEndpoint, speechKey: speechKey,
+                                summaries: summaries
                             )
                             if model.configurationStatus == "Connected" { loadSavedProvider() }
                         }
@@ -203,7 +221,9 @@ struct SettingsView: View {
                     .disabled(!complete)
                 }
                 .disabled(model.isVerifyingConfiguration || archiveBusy)
-                Text("Testing sends a short text request and one second of generated silence to the selected services. Both must pass before saving resumes pending recordings.")
+                Text(summaries
+                     ? "Testing sends a short text request and one second of generated silence to the selected services. Both must pass before saving resumes pending recordings."
+                     : "Testing sends one second of generated silence to Azure Speech. It must pass before saving resumes pending recordings.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if archiveBusy {
@@ -215,9 +235,13 @@ struct SettingsView: View {
             Divider()
             DisclosureGroup("How processing & storage work", isExpanded: $showingDetails) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Without a saved AI configuration, recordings wait locally. You need a summary provider even when Azure Speech handles transcription.")
+                    Text(summaries
+                         ? "Without a saved AI configuration, recordings wait locally. You need a summary provider even when Azure Speech handles transcription."
+                         : "Without a saved Azure Speech configuration, recordings wait locally. Turn on AI summaries to add a summary provider.")
                     Text("API keys are stored unencrypted in your local app preferences.")
-                    Text("Each meeting includes its transcript, a summary, a Simplified Chinese summary, and a short Chinese folder title.")
+                    Text(summaries
+                         ? "Each meeting includes its transcript, a summary, a Simplified Chinese summary, and a short Chinese folder title."
+                         : "Each meeting includes its audio, the original transcription and a readable transcript, in a folder named by its start time or imported file name.")
                 }
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
@@ -258,24 +282,32 @@ struct SettingsView: View {
         }
         if hasEdits { return "Unsaved changes. Pending recordings use the saved configuration." }
         if !model.providerReady { return "Complete the fields above to enable processing." }
+        if !model.summariesEnabled { return "Saved: \(SpeechTranscriber.model) for transcription. AI summaries are off." }
         return model.speechTranscriber != nil
             ? "Saved: \(SpeechTranscriber.model) for transcription; \(model.selectedModelID) for summaries."
             : "Saved: \(model.selectedModelID) for transcription and summaries."
     }
 
     private var hasEdits: Bool {
-        baseURL != model.providerBaseURL || modelID != model.selectedModelID || key != model.apiKey
+        guard summaries == model.summariesEnabled else { return true }
+        let speechEdits = speechEndpoint != model.speechEndpoint || speechKey != model.speechKey
+        // Hidden provider fields do not count while AI summaries are off.
+        guard summaries else { return speechEdits }
+        return baseURL != model.providerBaseURL || modelID != model.selectedModelID || key != model.apiKey
             || useSpeech != (model.speechTranscriber != nil)
-            || (useSpeech && (speechEndpoint != model.speechEndpoint || speechKey != model.speechKey))
+            || (useSpeech && speechEdits)
     }
     private var complete: Bool {
-        let fields = [baseURL, modelID, key] + (useSpeech ? [speechEndpoint, speechKey] : [])
+        let fields = (summaries ? [baseURL, modelID, key] : []) + (usesSpeech ? [speechEndpoint, speechKey] : [])
         return fields.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
     private var archiveBusy: Bool {
         model.isRecording || model.isChangingRecording || model.isProcessing || model.isImporting
     }
+    /// Azure Speech transcribes when it is selected, and always when AI summaries are off.
+    private var usesSpeech: Bool { useSpeech || !summaries }
     private func loadSavedProvider() {
+        summaries = model.summariesEnabled
         baseURL = model.providerBaseURL
         modelID = model.selectedModelID
         key = model.apiKey

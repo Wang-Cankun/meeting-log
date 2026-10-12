@@ -136,6 +136,8 @@ struct ArchivedMeeting: Identifiable, Equatable {
     let createdAt: Date
     let url: URL
     var captureWarning: String? = nil
+    /// False for meetings processed with AI summaries off: the folder holds audio and transcripts only.
+    var hasSummary = true
 }
 
 /// Steps between Stop and handing the session to processing; raw tracks are never removed here.
@@ -230,12 +232,31 @@ enum ProcessingStage: Equatable, Sendable {
         guard case let .transcribe(completed, total) = self, total > 0 else { return 0 }
         return min(1, max(0, Double(completed) / Double(total)))
     }
+
+    /// Transcript-only jobs end after Clean, so their bar shows only the stages they run.
+    static func segmentTitles(summaries: Bool) -> [String] {
+        summaries ? segmentTitles : Array(segmentTitles.prefix(3))
+    }
+
+    /// The stage bar's VoiceOver value, counting only the segments the job runs.
+    static func progressDescription(_ stage: ProcessingStage?, summaries: Bool) -> String {
+        guard let stage else { return "Not started" }
+        let titles = segmentTitles(summaries: summaries)
+        guard stage.segment < titles.count else { return "Complete" }
+        let title = titles[stage.segment] == "中文" ? "Chinese" : titles[stage.segment]
+        if case let .transcribe(completed, total) = stage, total > 0 {
+            return "Step \(stage.segment + 1) of \(titles.count), \(title), \(completed) of \(total)"
+        }
+        return "Step \(stage.segment + 1) of \(titles.count), \(title)"
+    }
 }
 
 struct ProcessingProgress: Equatable, Sendable {
     var stage: ProcessingStage
     /// Human-readable line shown under the stage bar.
     var detail: String
+    /// False for a job processed with AI summaries off.
+    var summaries = true
 }
 
 /// One pending (not yet archived) session as the panel's Recent list shows it.

@@ -88,6 +88,103 @@ extension AppModel {
         print("Settings passed: all-or-nothing save, reload, MAI routing, authentication recovery, audio capability, switch and removal")
     }
 
+    @MainActor static func checkTranscriptOnlySettings() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "transcript-only-settings-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = UserDefaults.standard
+        let domain = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName
+        let saved = defaults.persistentDomain(forName: domain) ?? [:]
+        defer {
+            defaults.setPersistentDomain(saved, forName: domain)
+            defaults.removeVolatileDomain(forName: UserDefaults.argumentDomain)
+        }
+        for (key, value) in [
+            ArchiveStore.rootDefaultsKey: root.path, "providerAPIKey": "", "providerModel": "",
+            "speechEndpoint": "", "speechAPIKey": ""
+        ] { defaults.set(value, forKey: key) }
+        // Pending recordings without a project fall back to the selected one, which may be left over from another check.
+        for key in ["summariesEnabled", "selectedProjectName"] { defaults.removeObject(forKey: key) }
+        let model = AppModel(startsServices: false)
+        precondition(model.summariesEnabled && !model.providerReady, "AI summaries stay on by default")
+        let restoreSessions = SettingsFixture.interceptDefaultSessions()
+        defer { restoreSessions() }
+        func requests() -> [String] { SettingsFixture.state.withLock { $0.requests } }
+
+        // A failed speech test changes nothing, including the switch. A stale `useSpeech: false` still means Azure Speech.
+        SettingsFixture.state.withLock { $0 = .init(rejectSpeech: true) }
+        await model.testProcessingConfiguration(baseURL: "", modelID: "", key: "", useSpeech: false,
+                                                speechEndpoint: "https://settings.invalid", speechKey: "fixture", summaries: false)
+        precondition(model.summariesEnabled && !model.providerReady && model.speechTranscriber == nil)
+        precondition(model.configurationStatus?.contains("Azure Speech") == true, model.configurationStatus ?? "Missing status")
+        precondition(requests() == ["speech"], "\(requests())")
+
+        SettingsFixture.state.withLock { $0 = .init() }
+        await model.testProcessingConfiguration(baseURL: "", modelID: "", key: "", useSpeech: false,
+                                                speechEndpoint: " https://settings.invalid ", speechKey: " fixture ", summaries: false)
+        precondition(model.configurationStatus == "Connected" && model.providerReady && !model.summariesEnabled,
+                     model.configurationStatus ?? "Missing status")
+        precondition(requests() == ["speech"], "Transcript-only setup must not contact an AI provider: \(requests())")
+        precondition(!model.canGenerateSummaries)
+        let reloaded = AppModel(startsServices: false)
+        precondition(!reloaded.summariesEnabled && reloaded.providerReady && reloaded.speechTranscriber?.apiKey == "fixture",
+                     "The switch and Azure Speech must survive reloading")
+
+        let store = ArchiveStore(root: root)
+        let (directory, manifest) = try store.createPendingSession(videoEnabled: false, microphoneID: nil)
+        let silence = root.appending(path: "silence.flac")
+        try MediaProcessor.encodeSilence(seconds: 2, destination: silence)
+        try MediaProcessor.encodeSpeech(source: silence, destination: directory.appending(path: "original.m4a"))
+        final class ProgressLog { var values: [ProcessingProgress] = [] }
+        let progressLog = ProgressLog()
+        let progressWatch = model.$processingProgress.sink { if let value = $0 { progressLog.values.append(value) } }
+        await model.resumePendingSessions()
+        await model.processingTask?.value
+        progressWatch.cancel()
+        precondition(!progressLog.values.isEmpty && progressLog.values.allSatisfy { !$0.summaries },
+                     "The panel must draw a transcript-only job's bar without summary stages")
+        let pending = try store.pendingSessions()
+        let meetings = try store.recentMeetings()
+        precondition(pending.isEmpty && meetings.count == 1, model.pendingFailureText ?? "Missing meeting")
+        let expected = "\(ArchiveStore.timestamp.string(from: manifest.startedAt))-\(ArchiveStore.transcriptOnlyTitle(for: manifest))"
+        precondition(!meetings[0].hasSummary && meetings[0].url.lastPathComponent == expected, meetings[0].url.lastPathComponent)
+        for name in ["audio.m4a", "transcript_raw.md", "transcript.md"] {
+            precondition(FileManager.default.fileExists(atPath: meetings[0].url.appending(path: name).path), "Missing \(name)")
+        }
+        precondition(!FileManager.default.fileExists(atPath: meetings[0].url.appending(path: "summary.md").path))
+        precondition(requests().allSatisfy { $0 == "speech" }, "Transcript-only processing must not contact an AI provider: \(requests())")
+
+        // Turning summaries back on tests and saves the provider as before.
+        SettingsFixture.state.withLock { $0 = .init() }
+        await model.testProcessingConfiguration(baseURL: "https://settings.invalid/v1", modelID: "text-only", key: "fixture",
+                                                useSpeech: true, speechEndpoint: model.speechEndpoint, speechKey: model.speechKey)
+        precondition(model.summariesEnabled && model.providerReady && model.canGenerateSummaries && requests() == ["text", "speech"])
+
+        // Turning them off again ignores leftover provider fields and keeps the saved provider.
+        SettingsFixture.state.withLock { $0 = .init() }
+        await model.testProcessingConfiguration(baseURL: "https://other.invalid/v1", modelID: "ignored-model", key: "other",
+                                                useSpeech: true, speechEndpoint: model.speechEndpoint, speechKey: model.speechKey,
+                                                summaries: false)
+        precondition(!model.summariesEnabled && requests() == ["speech"], "\(requests())")
+        precondition(model.selectedModelID == "text-only" && defaults.string(forKey: "providerModel") == "text-only"
+                     && model.apiKey == "fixture", "Hidden provider fields must not replace the saved provider")
+        precondition(!model.canGenerateSummaries, "A saved key must not enable summaries while they are off")
+
+        // An import processed while a provider key is still saved must not reach that provider either.
+        SettingsFixture.state.withLock { $0 = .init() }
+        let source = root.appending(path: "Team sync.m4a")
+        try MediaProcessor.encodeSpeech(source: silence, destination: source)
+        try await model.importAudio([source], date: manifest.startedAt, projectName: nil)
+        await model.processingTask?.value
+        let imported = try store.recentMeetings().first { $0.url.lastPathComponent.hasSuffix("-Team sync") }
+        precondition(imported.map { !$0.hasSummary } == true, model.pendingFailureText ?? "Missing imported meeting")
+        precondition(requests().allSatisfy { $0 == "speech" } && !requests().isEmpty,
+                     "Imports must not contact a saved provider while summaries are off: \(requests())")
+
+        model.removeProviderConfiguration()
+        precondition(model.summariesEnabled && defaults.object(forKey: "summariesEnabled") == nil && !model.providerReady)
+        print("Transcript-only settings passed: speech-only save, stale fields ignored, no AI requests, reload, switch back, removal")
+    }
+
     @MainActor static func checkCaptureRecoveryPresentation() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "capture-state-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -299,7 +396,7 @@ extension AppModel {
         let (directory, manifest) = try store.createPendingSession(videoEnabled: false, microphoneID: nil)
         let original = try Data(contentsOf: directory.appending(path: "session.json"))
         let job = ProcessingJob(directory: directory, manifest: manifest, store: store,
-                                baseURL: "https://example.invalid", key: "", model: "test", projectName: nil)
+                                baseURL: "https://example.invalid", key: "", model: "test", summaries: true, projectName: nil)
         func expectBlocked(_ label: String) throws {
             model.processingFailureCount = 7
             model.retryFailedProcessing()

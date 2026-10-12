@@ -36,4 +36,4 @@ Treat project folders as the source of truth, save each recording to the project
 
 **Exit proof:** a new Unicode project receives a completed meeting under `meetings/MMddyyyy-<short-title>`, Finder actions select their targets, and deleting a recent meeting moves its complete directory to Trash without exposing `.pending`.
 
-The code and signed app bundle pass local checks. A real five-minute recording remains the hardware and permission acceptance check because it requires the user's selected output route and privacy grants. A configured OpenAI-compatible provider is required only for post-recording processing.
+The code and signed app bundle pass local checks. A real five-minute recording remains the hardware and permission acceptance check because it requires the user's selected output route and privacy grants. Post-recording processing needs a configured OpenAI-compatible provider, or only Azure Speech when AI summaries are off.

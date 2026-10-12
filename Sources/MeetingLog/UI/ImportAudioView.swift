@@ -79,7 +79,9 @@ struct ImportAudioView: View {
                     .frame(height: min(CGFloat(files.count) * 64, 200))
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
                     if !imported {
-                        Text("Processed in this order. Files remain separate sources in one transcript and summary.")
+                        Text(model.summariesEnabled
+                             ? "Processed in this order. Files remain separate sources in one transcript and summary."
+                             : "Processed in this order. Files remain separate sources in one transcript.")
                             .font(.caption).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -108,11 +110,11 @@ struct ImportAudioView: View {
                     .font(.callout).foregroundStyle(.orange).textSelection(.enabled)
             }
             if imported {
-                Label(model.providerReady ? "Meeting imported. Processing continues in MeetingLog." : "Meeting saved locally. Set up an AI provider in Settings to process it.", systemImage: "checkmark.circle.fill")
+                Label(model.providerReady ? "Meeting imported. Processing continues in MeetingLog." : "Meeting saved locally. Set up processing in Settings to process it.", systemImage: "checkmark.circle.fill")
                     .font(.callout).foregroundStyle(.green)
             }
             HStack {
-                Text(imported ? "You can close this window or start another meeting." : (model.providerReady ? "Audio is sent to your configured AI provider." : "Audio will wait locally until an AI provider is configured."))
+                Text(imported ? "You can close this window or start another meeting." : (model.providerReady ? "Audio is sent to your configured transcription service." : "Audio will wait locally until processing is set up in Settings."))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 12)
                 if model.isImporting { ProgressView().controlSize(.small) }

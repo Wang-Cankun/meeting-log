@@ -86,9 +86,12 @@ private struct PendingItemCard: View {
         switch item.state {
         case .processing:
             progressCard(badge: "Processing", stage: model.processingProgress?.stage ?? .prepare,
+                         summaries: model.processingProgress?.summaries ?? model.summariesEnabled,
                          detail: model.processingProgress?.detail ?? "Preparing")
         case .queued:
-            progressCard(badge: "Queued", stage: nil, detail: "Waiting for the current meeting to finish.")
+            // Settings cannot change while processing, so queued jobs share the saved mode.
+            progressCard(badge: "Queued", stage: nil, summaries: model.summariesEnabled,
+                         detail: "Waiting for the current meeting to finish.")
         case let .failed(message):
             PanelCard(tint: .orange, radius: Self.cardRadius) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -115,7 +118,7 @@ private struct PendingItemCard: View {
                 .padding(12)
             }
         case .waitingForProvider:
-            noticeCard(symbol: "tray.full", text: "Configure an AI provider to process this recording.",
+            noticeCard(symbol: "tray.full", text: "Set up processing in Settings to process this recording.",
                        retry: false, settings: true)
         case .needsRetry:
             noticeCard(symbol: "tray.full", text: "Saved locally, not processed yet.",
@@ -137,7 +140,7 @@ private struct PendingItemCard: View {
         }
     }
 
-    private func progressCard(badge: String, stage: ProcessingStage?, detail: String) -> some View {
+    private func progressCard(badge: String, stage: ProcessingStage?, summaries: Bool, detail: String) -> some View {
         PanelCard(radius: Self.cardRadius) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
@@ -153,7 +156,7 @@ private struct PendingItemCard: View {
                         .fixedSize()
                 }
                 .accessibilityElement(children: .combine)
-                StageBar(stage: stage)
+                StageBar(stage: stage, summaries: summaries)
                 Text(detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -201,7 +204,7 @@ private struct PendingItemCard: View {
                 .help("Show this recording's saved files in Finder")
             if settings {
                 Button("Settings", action: showSettings)
-                    .help("Configure an AI provider")
+                    .help("Set up processing in Settings")
             }
         }
         .controlSize(.regular)
@@ -259,7 +262,7 @@ private struct RecentMeetingRow: View {
             }
             .buttonStyle(.plain)
             .help("Open in Meeting summaries")
-            .accessibilityLabel("Open summary for \(meeting.title)")
+            .accessibilityLabel(meeting.hasSummary ? "Open summary for \(meeting.title)" : "Open transcript for \(meeting.title)")
             .accessibilityValue(meeting.captureWarning == nil ? meta : "\(meta), partial audio recovery")
             // The ellipsis menu appears only on hover; VoiceOver reaches the same actions here.
             .accessibilityActions { voiceOverActions }
@@ -305,7 +308,9 @@ private struct RecentMeetingRow: View {
     private var canDelete: Bool { !(model.isCaptureBusy || model.isChangingRecording || model.isProcessing) }
 
     @ViewBuilder private var actions: some View {
-        Button("Regenerate summary…", systemImage: "arrow.clockwise") { openSummaries(meeting.url) }
+        if meeting.hasSummary {
+            Button("Regenerate summary…", systemImage: "arrow.clockwise") { openSummaries(meeting.url) }
+        }
         Button("Move to project…", systemImage: "folder.badge.arrowshape.forward", action: moveToProject)
             .disabled(!model.canMoveMeeting(meeting))
         Button("Show in Finder", systemImage: "folder") { model.showInFinder(meeting.url) }
@@ -316,7 +321,7 @@ private struct RecentMeetingRow: View {
 
     /// The menu's actions for VoiceOver; unavailable ones are left out rather than disabled.
     @ViewBuilder private var voiceOverActions: some View {
-        Button("Regenerate summary…") { openSummaries(meeting.url) }
+        if meeting.hasSummary { Button("Regenerate summary…") { openSummaries(meeting.url) } }
         if model.canMoveMeeting(meeting) { Button("Move to project…", action: moveToProject) }
         Button("Show in Finder") { model.showInFinder(meeting.url) }
         if canDelete { Button("Move to Trash") { model.deleteMeeting(meeting) } }

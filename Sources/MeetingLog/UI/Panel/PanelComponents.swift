@@ -318,15 +318,17 @@ struct SourceRow<Trailing: View, Details: View>: View {
     }
 }
 
-/// Six-segment processing bar: finished stages full, the current one highlighted and partly filled.
+/// Processing bar: finished stages full, the current one highlighted and partly filled. Six segments, or three
+/// for a transcript-only job.
 struct StageBar: View {
     /// nil draws an empty bar, for queued meetings.
     let stage: ProcessingStage?
+    var summaries = true
 
     var body: some View {
         let current = stage?.segment ?? -1
         HStack(alignment: .top, spacing: 4) {
-            ForEach(Array(ProcessingStage.segmentTitles.enumerated()), id: \.offset) { index, title in
+            ForEach(Array(ProcessingStage.segmentTitles(summaries: summaries).enumerated()), id: \.offset) { index, title in
                 VStack(spacing: 4) {
                     GeometryReader { proxy in
                         ZStack(alignment: .leading) {
@@ -349,23 +351,13 @@ struct StageBar: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Processing progress")
-        .accessibilityValue(accessibilityValue(current: current))
+        .accessibilityValue(ProcessingStage.progressDescription(stage, summaries: summaries))
     }
 
     private func fill(_ index: Int, current: Int) -> CGFloat {
         if index < current { return 1 }
         if index == current, let stage { return CGFloat(stage.segmentFraction) }
         return 0
-    }
-
-    private func accessibilityValue(current: Int) -> String {
-        guard let stage else { return "Not started" }
-        guard current < ProcessingStage.segmentTitles.count else { return "Complete" }
-        let title = ProcessingStage.segmentTitles[current] == "中文" ? "Chinese" : ProcessingStage.segmentTitles[current]
-        if case let .transcribe(completed, total) = stage, total > 0 {
-            return "Step \(current + 1) of 6, \(title), \(completed) of \(total)"
-        }
-        return "Step \(current + 1) of 6, \(title)"
     }
 }
 

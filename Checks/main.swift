@@ -67,6 +67,55 @@ do {
     precondition(restored == summary)
 }
 
+// Transcript-only meetings are listed and moved without summary metadata.
+do {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appending(path: "transcript-only-\(UUID())")
+    defer { try? fm.removeItem(at: root) }
+    let store = ArchiveStore(root: root)
+    _ = try store.createProject(named: "A")
+    _ = try store.createProject(named: "B")
+    let startedAt = Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 12, hour: 14, minute: 30))!
+    let recording = SessionManifest(id: UUID(), startedAt: startedAt, status: .processing, videoEnabled: false,
+                                    microphoneID: nil, lastError: nil)
+    precondition(ArchiveStore.transcriptOnlyTitle(for: recording) == "会议 1430")
+    var imported = recording
+    imported.importedParts = [ImportedAudioPart(fileName: "0.m4a", originalName: "New Recording 2.m4a", duration: 5),
+                              ImportedAudioPart(fileName: "1.m4a", originalName: "Later.m4a", duration: 5)]
+    precondition(ArchiveStore.transcriptOnlyTitle(for: imported) == "New Recording 2")
+    imported.importedParts = nil
+    imported.importedFileName = "Team sync.mp3"
+    precondition(ArchiveStore.transcriptOnlyTitle(for: imported) == "Team sync")
+    imported.importedFileName = "  .m4a"
+    precondition(ArchiveStore.transcriptOnlyTitle(for: imported) == "会议 1430", "A name without a stem falls back to the time")
+    imported.importedFileName = "Call 10:30 a/b.m4a"
+    let unsafe = try store.finalDirectory(projectName: "A", title: ArchiveStore.transcriptOnlyTitle(for: imported), startedAt: startedAt)
+    precondition(unsafe.lastPathComponent == "10122026-Call 10 30 a b", unsafe.lastPathComponent)
+
+    let source = try store.finalDirectory(projectName: "A", title: ArchiveStore.transcriptOnlyTitle(for: recording), startedAt: startedAt)
+    precondition(source.lastPathComponent == "10122026-会议 1430", source.lastPathComponent)
+    try fm.createDirectory(at: source, withIntermediateDirectories: true)
+    let kept = ["transcript.md", "transcript_raw.md", "audio.m4a"]
+    for name in kept { try Data("KEEP_\(name)".utf8).write(to: source.appending(path: name)) }
+    let listed = try store.recentMeetings()
+    precondition(listed.count == 1 && !listed[0].hasSummary && listed[0].title == "会议 1430", "\(listed)")
+    let moved = try store.moveMeeting(listed[0], to: "B")
+    precondition(moved.projectName == "B" && !moved.hasSummary && !fm.fileExists(atPath: source.path))
+    precondition(!fm.fileExists(atPath: moved.url.appending(path: "summary.md").path), "Moving must not invent a summary")
+    for name in kept {
+        let data = try Data(contentsOf: moved.url.appending(path: name))
+        precondition(data == Data("KEEP_\(name)".utf8))
+    }
+    // A translated summary without its original still has to carry valid metadata.
+    try "# No metadata".write(to: moved.url.appending(path: "summary_cn.md"), atomically: true, encoding: .utf8)
+    do { _ = try store.moveMeeting(moved, to: "A"); preconditionFailure("Invalid metadata accepted") } catch {}
+    precondition(fm.fileExists(atPath: moved.url.appending(path: "audio.m4a").path))
+    // MeetingIndex reads a missing summary as empty text; that must yield no snippet and no start time.
+    let empty = SummaryDocument.parse("")
+    precondition(empty.snippet == nil && SummaryDocument.startDate(empty.date) == nil)
+    print("Transcript-only archive passed: local titles, listing, moving without summary metadata")
+}
+
 // Names accepted by creation remain destinations; existing context is never replaced.
 do {
     let root = FileManager.default.temporaryDirectory.appending(path: "reserved-\(UUID())")
@@ -301,6 +350,15 @@ precondition(ProcessingStage.transcribe(completed: 3, total: 8).segmentFraction 
 precondition(ProcessingStage.transcribe(completed: 0, total: 0).segmentFraction == 0)
 precondition(ProcessingStage.clean.segment == 2 && ProcessingStage.summary.segment == 3 && ProcessingStage.evidence.segment == 4)
 precondition(ProcessingStage.chinese.segment == 5 && ProcessingStage.complete.segment == 6)
+// Transcript-only jobs end after Clean; the bar and VoiceOver count only the stages they run.
+precondition(ProcessingStage.segmentTitles(summaries: true) == ProcessingStage.segmentTitles)
+precondition(ProcessingStage.segmentTitles(summaries: false) == ["Prepare", "Transcribe", "Clean"])
+precondition(ProcessingStage.progressDescription(.transcribe(completed: 3, total: 8), summaries: true) == "Step 2 of 6, Transcribe, 3 of 8")
+precondition(ProcessingStage.progressDescription(.chinese, summaries: true) == "Step 6 of 6, Chinese")
+precondition(ProcessingStage.progressDescription(.clean, summaries: false) == "Step 3 of 3, Clean")
+precondition(ProcessingStage.progressDescription(.complete, summaries: false) == "Complete")
+precondition(ProcessingStage.progressDescription(nil, summaries: false) == "Not started")
+precondition(ProcessingProgress(stage: .prepare, detail: "Preparing").summaries, "Progress defaults to the summary pipeline")
 
 let pendingFixture = SessionManifest(id: UUID(), startedAt: Date(), status: .failed, videoEnabled: false,
                                      microphoneID: nil, lastError: "Upload failed")
@@ -416,6 +474,7 @@ try await checkSummaryRegeneration()
 try await checkCapturePreparation()
 try await checkSeparateTrackTranscription()
 try await checkSpeechTranscription()
+try await checkTranscriptOnlyProcessing()
 checkSummaryMarkdown()
 checkSummaryDocument()
 checkPanelSourceNames()

@@ -45,7 +45,11 @@ struct MeetingDetailView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         header(document)
                         notices
-                        SummaryDocumentView(markdown: markdown)
+                        if meeting.hasSummary {
+                            SummaryDocumentView(markdown: markdown)
+                        } else {
+                            TranscriptOnlyNotice()
+                        }
                     }
                     .frame(maxWidth: 720, alignment: .leading)
                     .padding(.horizontal, 32).padding(.top, 10).padding(.bottom, 32)
@@ -159,6 +163,25 @@ struct MeetingDetailView: View {
         }
         formatter.dateFormat = sameYear ? "EEE, MMM d · HH:mm" : "EEE, MMM d, yyyy · HH:mm"
         return formatter.string(from: start)
+    }
+}
+
+/// Meetings processed with AI summaries off keep only their transcripts, which the inspector shows.
+private struct TranscriptOnlyNotice: View {
+    @EnvironmentObject private var navigator: TranscriptNavigator
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("No summary", systemImage: "text.alignleft").font(.headline)
+            Text("This meeting was saved as a transcript only, because AI summaries were off when it was processed.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !navigator.showsInspector {
+                Button("Show transcript") { navigator.showsInspector = true }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

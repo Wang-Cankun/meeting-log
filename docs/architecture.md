@@ -17,7 +17,7 @@ menu bar panel
   -> with a speech service: one MAI-Transcribe-2 request per recording, file, or raw track
      otherwise: ten-minute windows with ten-second overlap, chunked per raw track when both tracks were mixed
   -> transcription coverage gate
-  -> evidence-bound summary in the selected project
+  -> evidence-bound summary in the selected project (skipped when AI summaries are off)
   -> project/meetings/session archive
 ```
 
@@ -90,6 +90,8 @@ Imports, system-only recoveries, legacy combined captures, and sessions whose sa
 ## Speech-service transcription
 
 Settings verifies the selected transcription service and summary provider together before saving either. Verification sends a JSON text probe and one second of generated silence, including audio-input validation when the chat provider handles transcription. Successful saving resumes pending recordings with the complete configuration. Speech authentication errors identify the speech service without invalidating the summary provider. Switching from whole-file speech to chat-model windows rebuilds incompatible transcription checkpoints from retained audio.
+
+When AI summaries are off, Settings verifies and saves Azure Speech alone and `MeetingProcessor` runs without a provider client. After the coverage gate it writes `transcript_raw.md` and the locally tidied `transcript.md`, skips the summary, evidence and Chinese steps, and archives under `MMddyyyy-会议 HHmm` (recording start) or the first imported file's name. Without a speech service such a job fails as a configuration error and stays pending. `recentMeetings` lists a folder with `transcript.md` and no `summary.md` as transcript-only; moving it rewrites no file, and Meeting summaries shows its transcript without summary actions.
 
 When Settings holds an Azure Speech endpoint and key, `SpeechTranscriber` replaces chat-model transcription and the provider handles text steps only. Each section (the whole recording, each imported file, or each raw track of a complete capture) is encoded to 16 kHz mono 16-bit FLAC and sent as one fast-transcription request with MAI-Transcribe-2 in clean style, diarization on (off for the microphone track, which stays `Me`), and a phrase list of names and terms from the project and global context, most specific first. Diarized phrases become `[MM:SS] Speaker X:` turns locally and pass the same timestamp validation as model output. A response whose phrases share one offset, or run past the section, lost its timing and is rejected. A section over fifteen minutes that fails for any reason other than authentication or cancellation is split into the standard overlapping ten-minute windows and retried; finished sections are kept. Azure reports a slow upload as a 400 form error, which is retried as a timeout. The readable transcript comes from local rules instead of an LLM pass (see decisions).
 

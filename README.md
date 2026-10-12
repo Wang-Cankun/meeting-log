@@ -29,6 +29,19 @@ Failed recordings stay local. **Retry** resumes their recovery, and **Show files
 
 Local macOS and CI builds use the same `scripts/build-app.sh` script and free ad-hoc signing by default. No Apple account, Developer ID certificate, or signing secrets are needed. The GitHub Actions build produces `MeetingLog-macOS-arm64.zip`, preserving the signed app bundle and executable permissions. These builds are not notarized; macOS may require approval in System Settings → Privacy & Security on first launch after download. Signing is free; AI provider usage and any applicable CI runner charges are separate.
 
+Every push, pull request, and manual workflow run builds a downloadable Actions artifact. Pushing a version tag matching `v*` also publishes a GitHub Release with that build's `MeetingLog-macOS-arm64.zip` and automatically generated release notes. Publication runs only after the macOS build succeeds and uses the built-in GitHub token; no additional secrets are required. Builds still use ad-hoc signing and are not notarized.
+
+To release a reviewed commit on `main`, choose an unused version (for example, `v0.1.0`):
+
+```bash
+git switch main
+git pull --ff-only
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Download published builds from [Releases](https://github.com/Wang-Cankun/meeting-log/releases). Branch and PR builds remain available from their Actions run.
+
 ## Import an iPhone recording
 
 AirDrop a Voice Memo to Downloads, then click **Import Audio** in MeetingLog. Choose a file or drop it into the import window, select a project, and check the meeting date before importing. M4A, MP3, WAV, AIFF, and CAF are supported. The source file stays untouched; the app keeps its imported copy until compressed audio and Markdown are complete, then removes that extra copy. Processing uses the configured AI provider, or waits locally when no provider is configured.

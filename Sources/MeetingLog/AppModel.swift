@@ -149,7 +149,7 @@ final class AppModel: ObservableObject {
         return summariesEnabled ? keySaved && !selectedModelID.isEmpty : speechTranscriber != nil
     }
 
-    /// Off means MeetingLog never contacts an AI model, including Regenerate with a key saved earlier.
+    /// Off means MeetingLog never contacts a language model, including Regenerate with a key saved earlier.
     var canGenerateSummaries: Bool {
         summariesEnabled && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }

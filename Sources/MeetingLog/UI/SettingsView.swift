@@ -143,8 +143,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Toggle("Generate AI summaries", isOn: draft($summaries))
                     Text(summaries
-                         ? "An AI model writes each meeting's summary and Simplified Chinese summary."
-                         : "No AI model is used. Each meeting keeps its audio and transcripts.")
+                         ? "A language model writes each meeting's summary and Simplified Chinese summary."
+                         : "No language model is used. Each meeting keeps its audio and transcripts.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -157,7 +157,7 @@ struct SettingsView: View {
                 if usesSpeech {
                     Text(summaries
                          ? "Audio goes to Azure Speech. Only transcript text goes to the AI provider below."
-                         : "Audio goes to Azure Speech · \(SpeechTranscriber.model). Nothing is sent to an AI model.")
+                         : "Audio goes to Azure Speech · \(SpeechTranscriber.model). Nothing is sent to a language model.")
                         .font(.caption).foregroundStyle(.secondary)
                     field("Speech endpoint", hint: "Resource root URL from Azure, without /speechtotext or an API version.") {
                         TextField("", text: draft($speechEndpoint),

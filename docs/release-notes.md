@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Turn off **Generate AI summaries** in Settings to keep transcripts only. Azure Speech is then the only service needed, no AI model is contacted, and each meeting is archived with its audio, original transcription and readable transcript.
+- Turn off **Generate AI summaries** in Settings to keep transcripts only. Azure Speech is then the only service needed, no language model is contacted, and each meeting is archived with its audio, original transcription and readable transcript.
 - Configure transcription and summaries entirely in Settings. Choose an audio-capable AI provider or Azure Speech with MAI-Transcribe-2, then test and save the complete configuration once.
 - Failed configuration tests preserve saved settings. Correcting Speech credentials or switching transcription services resumes pending recordings without manual file cleanup.
 - New installations save meetings under `~/Documents/MeetingLog`; existing archive locations are preserved.

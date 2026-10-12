@@ -146,7 +146,7 @@ func checkTranscriptOnlyProcessing() async throws {
     let archived = try await MeetingProcessor(store: store, client: nil, speech: speech, progress: { recorder.record($0) })
         .process(directory: directory, manifest: manifest, projectName: project.name)
     let state = SpeechFixture.snapshot()
-    precondition(state.speechRequests == 1 && state.chatRequests == 0, "Transcript-only processing must not contact an AI model: \(state)")
+    precondition(state.speechRequests == 1 && state.chatRequests == 0, "Transcript-only processing must not contact a language model: \(state)")
     let stages = recorder.stages
     precondition(stages.first == .prepare && stages.contains(.clean) && stages.last == .complete, "\(stages)")
     precondition(!stages.contains { [ProcessingStage.summary, .evidence, .chinese].contains($0) }, "\(stages)")

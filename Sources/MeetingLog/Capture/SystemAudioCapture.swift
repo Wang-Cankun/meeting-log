@@ -119,7 +119,8 @@ final class SystemAudioCapture: @unchecked Sendable {
                 }
             }
 
-            let output = output
+            // A distinct name: shadowing `output` here makes the `queue.sync` closure above capture it before declaration.
+            let state = output
             try check(
                 AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateDeviceID, queue) { _, inputData, _, _, _ in
                     guard let buffer = AVAudioPCMBuffer(
@@ -128,8 +129,8 @@ final class SystemAudioCapture: @unchecked Sendable {
                               deallocator: nil
                           )
                     else { return }
-                    output.process(buffer, generation: generation) {
-                        try output.audioFile?.write(from: buffer)
+                    state.process(buffer, generation: generation) {
+                        try state.audioFile?.write(from: buffer)
                     }
                 },
                 operation: "prepare system audio"

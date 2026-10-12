@@ -289,7 +289,7 @@ struct ArchiveStore {
     }
 
     /// Without a summary model there is no generated title: imports keep their file name, recordings their start time.
-    static func transcriptOnlyTitle(for manifest: SessionManifest, timeZone: TimeZone = .current) -> String {
+    static func transcriptOnlyTitle(for manifest: SessionManifest) -> String {
         if let name = manifest.importedParts?.first?.originalName ?? manifest.importedFileName {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines) as NSString
             // NSString reads ".m4a" as a hidden name without an extension; it is only an extension here.
@@ -298,7 +298,6 @@ struct ArchiveStore {
         }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timeZone
         formatter.dateFormat = "HHmm"
         return "会议 " + formatter.string(from: manifest.startedAt)
     }

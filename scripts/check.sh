@@ -48,6 +48,7 @@ import Foundation
 @main struct RetryChecks {
     @MainActor static func main() async throws {
         try await AppModel.checkSettingsConfiguration()
+        try await AppModel.checkTranscriptOnlySettings()
         try AppModel.checkRetryWhileBusy()
         try await AppModel.checkCaptureRecoveryPresentation()
         try await AppModel.checkSavingPhase()

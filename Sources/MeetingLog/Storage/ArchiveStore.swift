@@ -195,7 +195,10 @@ struct ArchiveStore {
         }
         var originals: [String: Data] = [:]
         var replacements: [String: Data] = [:]
-        for name in ["summary.md", "summary_cn.md"] {
+        // Transcript-only meetings have no summary metadata to update.
+        let summaryNames = ["summary.md", "summary_cn.md"]
+        let hasSummaryFiles = summaryNames.contains { fileManager.fileExists(atPath: source.appending(path: $0).path) }
+        for name in hasSummaryFiles ? summaryNames : [] {
             let file = source.appending(path: name)
             if name == "summary_cn.md", !fileManager.fileExists(atPath: file.path) { continue }
             guard try file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
@@ -239,7 +242,7 @@ struct ArchiveStore {
         }
         return ArchivedMeeting(title: meeting.title, projectName: destinationProject.name, dateText: meeting.dateText,
                                date: meeting.date, createdAt: meeting.createdAt, url: destination,
-                               captureWarning: meeting.captureWarning)
+                               captureWarning: meeting.captureWarning, hasSummary: meeting.hasSummary)
     }
 
     func recentMeetings(limit: Int = 3) throws -> [ArchivedMeeting] {
@@ -256,8 +259,7 @@ struct ArchiveStore {
                 let name = meeting.lastPathComponent
                 guard values?.isDirectory == true,
                       name.count > 8,
-                      fileManager.fileExists(atPath: meeting.appending(path: "transcript.md").path),
-                      fileManager.fileExists(atPath: meeting.appending(path: "summary.md").path)
+                      fileManager.fileExists(atPath: meeting.appending(path: "transcript.md").path)
                 else { return nil }
                 let dateText = String(name.prefix(8))
                 guard let date = Self.timestamp.date(from: dateText) else { return nil }
@@ -271,7 +273,9 @@ struct ArchiveStore {
                     date: date,
                     createdAt: createdAt,
                     url: meeting,
-                    captureWarning: (try? CapturePreparation.load(in: meeting))?.warning
+                    captureWarning: (try? CapturePreparation.load(in: meeting))?.warning,
+                    // Meetings processed with AI summaries off keep their folder name as the title.
+                    hasSummary: fileManager.fileExists(atPath: meeting.appending(path: "summary.md").path)
                 )
             }
         }
@@ -282,6 +286,21 @@ struct ArchiveStore {
 
     func moveCompletedSession(from pending: URL, to destination: URL) throws {
         try fileManager.moveItem(at: pending, to: destination)
+    }
+
+    /// Without a summary model there is no generated title: imports keep their file name, recordings their start time.
+    static func transcriptOnlyTitle(for manifest: SessionManifest, timeZone: TimeZone = .current) -> String {
+        if let name = manifest.importedParts?.first?.originalName ?? manifest.importedFileName {
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines) as NSString
+            // NSString reads ".m4a" as a hidden name without an extension; it is only an extension here.
+            let stem = trimmed.hasPrefix(".") && trimmed.pathExtension.isEmpty ? "" : trimmed.deletingPathExtension
+            if !stem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return stem }
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "HHmm"
+        return "会议 " + formatter.string(from: manifest.startedAt)
     }
 
     static func meetingTitle(_ value: String) -> String {

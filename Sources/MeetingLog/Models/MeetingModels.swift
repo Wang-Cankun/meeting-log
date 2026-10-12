@@ -136,6 +136,8 @@ struct ArchivedMeeting: Identifiable, Equatable {
     let createdAt: Date
     let url: URL
     var captureWarning: String? = nil
+    /// False for meetings processed with AI summaries off: the folder holds audio and transcripts only.
+    var hasSummary = true
 }
 
 /// Steps between Stop and handing the session to processing; raw tracks are never removed here.

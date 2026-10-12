@@ -1053,7 +1053,8 @@ private struct ProcessingJob {
     let model: String
     var speech: SpeechTranscriber? = nil
     /// Snapshotted at enqueue time like the other settings; false archives transcripts only.
-    var summaries = true
+    /// Required, so no enqueue path can fall back to sending transcripts to a provider.
+    let summaries: Bool
     let projectName: String?
 }
 

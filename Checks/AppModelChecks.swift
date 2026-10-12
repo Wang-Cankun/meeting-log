@@ -163,6 +163,17 @@ extension AppModel {
                      && model.apiKey == "fixture", "Hidden provider fields must not replace the saved provider")
         precondition(!model.canGenerateSummaries, "A saved key must not enable summaries while they are off")
 
+        // An import processed while a provider key is still saved must not reach that provider either.
+        SettingsFixture.state.withLock { $0 = .init() }
+        let source = root.appending(path: "Team sync.m4a")
+        try MediaProcessor.encodeSpeech(source: silence, destination: source)
+        try await model.importAudio([source], date: manifest.startedAt, projectName: nil)
+        await model.processingTask?.value
+        let imported = try store.recentMeetings().first { $0.url.lastPathComponent.hasSuffix("-Team sync") }
+        precondition(imported.map { !$0.hasSummary } == true, model.pendingFailureText ?? "Missing imported meeting")
+        precondition(requests().allSatisfy { $0 == "speech" } && !requests().isEmpty,
+                     "Imports must not contact a saved provider while summaries are off: \(requests())")
+
         model.removeProviderConfiguration()
         precondition(model.summariesEnabled && defaults.object(forKey: "summariesEnabled") == nil && !model.providerReady)
         print("Transcript-only settings passed: speech-only save, stale fields ignored, no AI requests, reload, switch back, removal")
@@ -379,7 +390,7 @@ extension AppModel {
         let (directory, manifest) = try store.createPendingSession(videoEnabled: false, microphoneID: nil)
         let original = try Data(contentsOf: directory.appending(path: "session.json"))
         let job = ProcessingJob(directory: directory, manifest: manifest, store: store,
-                                baseURL: "https://example.invalid", key: "", model: "test", projectName: nil)
+                                baseURL: "https://example.invalid", key: "", model: "test", summaries: true, projectName: nil)
         func expectBlocked(_ label: String) throws {
             model.processingFailureCount = 7
             model.retryFailedProcessing()

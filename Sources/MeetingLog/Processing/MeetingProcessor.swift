@@ -3,7 +3,8 @@ import Foundation
 @MainActor
 struct MeetingProcessor {
     let store: ArchiveStore
-    let client: ProviderClient
+    /// Writes summaries and, without a speech service, transcribes. Without it the meeting is archived as a transcript only.
+    let client: ProviderClient?
     /// When set, a speech service transcribes audio and the provider handles only text steps.
     var speech: SpeechTranscriber? = nil
     var progress: @Sendable (ProcessingProgress) -> Void = { _ in }
@@ -30,6 +31,9 @@ struct MeetingProcessor {
                 blocks = try await transcribeWithSpeech(speech, directory: directory, preparation: capturePreparation,
                                                         context: projectContext + "\n" + context)
             } else {
+                guard let client else {
+                    throw ProviderError.configuration("Transcript-only processing needs Azure Speech. Set it up in Settings.")
+                }
                 let prepared: (audio: URL, chunks: [AudioChunk])
                 switch MediaProcessor.pendingInput(in: directory) {
                 case let .combined(capture):
@@ -53,7 +57,6 @@ struct MeetingProcessor {
                 } else {
                     blocks = plan
                 }
-                let client = client
                 let chunks = prepared.chunks
                 blocks = try await TranscriptionBatch.run(blocks: blocks) { index in
                     let chunk = chunks[index]
@@ -84,10 +87,22 @@ struct MeetingProcessor {
             try rawTranscript.write(to: directory.appending(path: "transcript_raw.md"), atomically: true, encoding: .utf8)
             progress(.init(stage: .clean, detail: "Cleaning transcript across excerpts"))
             // Speech-service output is already clean-style; local rules keep its words and speaker labels intact.
-            let transcript = speech == nil
-                ? try await TranscriptPolisher.clean(raw: rawTranscript, context: transcriptionContext, client: client)
-                : TranscriptPolisher.tidy(rawTranscript)
+            let transcript: String
+            if speech == nil, let client {
+                transcript = try await TranscriptPolisher.clean(raw: rawTranscript, context: transcriptionContext, client: client)
+            } else {
+                transcript = TranscriptPolisher.tidy(rawTranscript)
+            }
             try transcript.write(to: directory.appending(path: "transcript.md"), atomically: true, encoding: .utf8)
+
+            guard let client else {
+                // AI summaries are off: the audio and both transcripts are the complete meeting.
+                let destination = try store.finalDirectory(projectName: resolvedProjectName,
+                                                           title: ArchiveStore.transcriptOnlyTitle(for: manifest),
+                                                           startedAt: manifest.startedAt)
+                try archive(directory, to: destination, manifest: manifest, preparation: capturePreparation)
+                return destination
+            }
 
             progress(.init(stage: .summary, detail: "Writing summary"))
             let analysisPrompt = Prompts.analysis(
@@ -129,29 +144,7 @@ struct MeetingProcessor {
                 title: chinese.folderTitle,
                 startedAt: manifest.startedAt
             )
-            try store.moveCompletedSession(from: directory, to: destination)
-            // The compressed audio and both Markdown outputs are now safely archived.
-            // Source files outside the app archive are never touched.
-            for ext in AudioImport.supportedExtensions {
-                try? FileManager.default.removeItem(at: destination.appending(path: "original.\(ext)"))
-            }
-            try? FileManager.default.removeItem(at: destination.appending(path: "originals"))
-            let archivedCapture = destination.appending(path: "capture.mov")
-            let screen = destination.appending(path: "screen.mov")
-            if manifest.videoEnabled, !FileManager.default.fileExists(atPath: screen.path) {
-                try? FileManager.default.moveItem(at: archivedCapture, to: screen)
-            } else {
-                try? FileManager.default.removeItem(at: archivedCapture)
-            }
-            try? FileManager.default.removeItem(at: destination.appending(path: "chunks"))
-            try? FileManager.default.removeItem(at: destination.appending(path: "parts"))
-            try? FileManager.default.removeItem(at: destination.appending(path: "coverage.json"))
-            try? FileManager.default.removeItem(at: destination.appending(path: "session.json"))
-            if capturePreparation?.retainsRawTracks != true {
-                try? FileManager.default.removeItem(at: destination.appending(path: "system-audio.caf"))
-                try? FileManager.default.removeItem(at: destination.appending(path: "microphone.m4a"))
-            }
-            progress(.init(stage: .complete, detail: "Complete"))
+            try archive(directory, to: destination, manifest: manifest, preparation: capturePreparation)
             return destination
         } catch {
             manifest.status = .failed
@@ -159,6 +152,33 @@ struct MeetingProcessor {
             try? store.write(manifest, to: directory)
             throw error
         }
+    }
+
+    /// Moves the finished session into its project, then removes processing intermediates.
+    private func archive(_ directory: URL, to destination: URL, manifest: SessionManifest, preparation: CapturePreparation?) throws {
+        try store.moveCompletedSession(from: directory, to: destination)
+        // The compressed audio and Markdown outputs are now safely archived.
+        // Source files outside the app archive are never touched.
+        for ext in AudioImport.supportedExtensions {
+            try? FileManager.default.removeItem(at: destination.appending(path: "original.\(ext)"))
+        }
+        try? FileManager.default.removeItem(at: destination.appending(path: "originals"))
+        let archivedCapture = destination.appending(path: "capture.mov")
+        let screen = destination.appending(path: "screen.mov")
+        if manifest.videoEnabled, !FileManager.default.fileExists(atPath: screen.path) {
+            try? FileManager.default.moveItem(at: archivedCapture, to: screen)
+        } else {
+            try? FileManager.default.removeItem(at: archivedCapture)
+        }
+        try? FileManager.default.removeItem(at: destination.appending(path: "chunks"))
+        try? FileManager.default.removeItem(at: destination.appending(path: "parts"))
+        try? FileManager.default.removeItem(at: destination.appending(path: "coverage.json"))
+        try? FileManager.default.removeItem(at: destination.appending(path: "session.json"))
+        if preparation?.retainsRawTracks != true {
+            try? FileManager.default.removeItem(at: destination.appending(path: "system-audio.caf"))
+            try? FileManager.default.removeItem(at: destination.appending(path: "microphone.m4a"))
+        }
+        progress(.init(stage: .complete, detail: "Complete"))
     }
 
     /// Transcribes microphone and computer audio separately when both raw tracks reached the capture mix.

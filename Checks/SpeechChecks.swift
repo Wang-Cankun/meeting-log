@@ -123,6 +123,58 @@ func checkSpeechTranscription() async throws {
     print("Speech transcription passed: diarized letters, Me track, timing guard, context phrases, whole-file request, window fallback, temperature retry")
 }
 
+/// With AI summaries off, the processor archives Azure Speech transcripts without any chat request.
+@MainActor
+func checkTranscriptOnlyProcessing() async throws {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appending(path: "transcript-only-processing-\(UUID())")
+    defer { try? fm.removeItem(at: root) }
+    let store = ArchiveStore(root: root)
+    let project = try store.createProject(named: "Speech")
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [SpeechFixture.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let speech = SpeechTranscriber(endpoint: "https://speech.invalid/", apiKey: "fixture", session: session)
+
+    let (directory, manifest) = try store.createPendingSession(videoEnabled: false, microphoneID: "fixture")
+    try writeSpeechTone(to: directory.appending(path: "system-audio.caf"), seconds: 0)
+    try writeSpeechTone(to: directory.appending(path: "microphone.m4a"), seconds: 20)
+    _ = try await CapturePreparation.prepare(in: directory)
+    SpeechFixture.reset(failFirstSpeech: false)
+    let recorder = StageRecorder()
+    let archived = try await MeetingProcessor(store: store, client: nil, speech: speech, progress: { recorder.record($0) })
+        .process(directory: directory, manifest: manifest, projectName: project.name)
+    let state = SpeechFixture.snapshot()
+    precondition(state.speechRequests == 1 && state.chatRequests == 0, "Transcript-only processing must not contact an AI model: \(state)")
+    let stages = recorder.stages
+    precondition(stages.first == .prepare && stages.contains(.clean) && stages.last == .complete, "\(stages)")
+    precondition(!stages.contains { [ProcessingStage.summary, .evidence, .chinese].contains($0) }, "\(stages)")
+    let expected = "\(ArchiveStore.timestamp.string(from: manifest.startedAt))-\(ArchiveStore.transcriptOnlyTitle(for: manifest))"
+    precondition(archived.lastPathComponent == expected, archived.lastPathComponent)
+    for name in ["audio.m4a", "transcript_raw.md", "transcript.md"] {
+        precondition(fm.fileExists(atPath: archived.appending(path: name).path), "Missing \(name)")
+    }
+    for name in ["summary.md", "summary_cn.md", "summary-provenance.json", "coverage.json", "session.json", "chunks"] {
+        precondition(!fm.fileExists(atPath: archived.appending(path: name).path), "Unexpected \(name)")
+    }
+    let readable = try String(contentsOf: archived.appending(path: "transcript.md"), encoding: .utf8)
+    precondition(readable.contains("[00:01] Speaker A: Opening."), readable)
+
+    // Nothing can transcribe without a speech service or a model; the recording must stay pending.
+    let (orphan, orphanManifest) = try store.createPendingSession(videoEnabled: false, microphoneID: nil)
+    try writeSpeechTone(to: orphan.appending(path: "original.m4a"), seconds: 2)
+    do {
+        _ = try await MeetingProcessor(store: store, client: nil)
+            .process(directory: orphan, manifest: orphanManifest, projectName: project.name)
+        preconditionFailure("Processing without any service accepted")
+    } catch ProviderError.configuration {}
+    let pending = try store.pendingSessions()
+    precondition(pending.contains { $0.1.id == orphanManifest.id && $0.1.status == .failed })
+    precondition(fm.fileExists(atPath: orphan.appending(path: "original.m4a").path))
+    print("Transcript-only processing passed: speech only, no chat requests, transcript archive, missing-service failure")
+}
+
 private func writeSpeechTone(to url: URL, seconds: Int) throws {
     let format = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)!
     let settings: [String: Any] = url.pathExtension == "m4a"
@@ -147,6 +199,7 @@ private final class SpeechFixture: URLProtocol, @unchecked Sendable {
         var flacUploads = 0
         var temperatureRejections = 0
         var cleanupRequests = 0
+        var chatRequests = 0
     }
     private static let state = Mutex(State())
     static func reset(failFirstSpeech: Bool) { state.withLock { $0 = State(failFirstSpeech: failFirstSpeech) } }
@@ -175,6 +228,7 @@ private final class SpeechFixture: URLProtocol, @unchecked Sendable {
             if fail { return respond(400, #"{"error":"diarization_unavailable"}"#) }
             return respond(200, #"{"phrases":[{"speaker":0,"offsetMilliseconds":1000,"text":"Opening."},{"speaker":2,"offsetMilliseconds":5000,"text":"Reply."}]}"#)
         }
+        Self.state.withLock { $0.chatRequests += 1 }
         let body = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
         if body["temperature"] != nil {
             Self.state.withLock { $0.temperatureRejections += 1 }

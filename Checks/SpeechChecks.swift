@@ -15,7 +15,8 @@ func checkSpeechTranscription() async throws {
     let text = try SpeechTranscriber.transcript(decoded, start: 0, end: 20, track: nil)
     precondition(text == "[00:01] Speaker A: Hello team.\n\n[00:04] Speaker B: Hi.\n\n[00:07] Speaker A: Let's start. Agenda first.\n\n[00:19] Speaker B: Late.", text)
     let offset = try SpeechTranscriber.transcript(decoded, start: 600, end: 620, track: .microphone)
-    precondition(offset.hasPrefix("[10:01] Me: Hello team. Hi. Let's start."), "Microphone turns are always Me")
+    precondition(offset == "[10:01] Me: Hello team.\n\n[10:04] Me: Hi.\n\n[10:07] Me: Let's start.\n\n[10:09] Me: Agenda first.\n\n[10:19] Me: Late.",
+                 "Microphone turns are always Me and keep their own times: \(offset)")
     let silent = try JSONDecoder().decode(SpeechResult.self, from: Data("{}".utf8))
     let silence = try SpeechTranscriber.transcript(silent, start: 0, end: 5, track: nil)
     precondition(silence == "[00:00] Speaker: [no audible speech]")

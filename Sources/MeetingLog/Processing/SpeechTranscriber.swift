@@ -94,7 +94,9 @@ struct SpeechTranscriber: Sendable {
                 letters[phrase.speaker] = label
             }
             let time = max(Int(start), min(Int(start + Double(phrase.offsetMilliseconds) / 1000), latest))
-            if let last = turns.last, last.label == label {
+            // A capture track holds only part of the conversation: joining its phrases here would carry every reply
+            // recorded on the other track past them.
+            if track == nil, let last = turns.last, last.label == label {
                 turns[turns.count - 1].text += " " + phrase.text
             } else {
                 turns.append((time, label, phrase.text))

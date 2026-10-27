@@ -39,7 +39,8 @@ enum TranscriptPolisher {
         func flush() {
             var turns = mergingSpeakers(run)
             turns = turns.enumerated().filter { index, turn in
-                guard isBackchannel(turn.text), index > 0, index + 1 < turns.count else { return true }
+                // The recording user's own "Okay." can accept a task, so Me turns are never treated as backchannels.
+                guard isBackchannel(turn.text), turn.speaker != "Me", index > 0, index + 1 < turns.count else { return true }
                 // A short reply to a question is an answer, not a backchannel.
                 let previous = turns[index - 1].text
                 return turns[index - 1].speaker != turns[index + 1].speaker || previous.hasSuffix("?") || previous.hasSuffix("？")

@@ -17,6 +17,56 @@ func checkSeparateTrackTranscription() async throws {
         TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete, text: "[00:03] Me: Hello?"),
     ])
     precondition(silent == "[00:03] Me: Hello?", "Silence placeholders must not interleave with speech")
+    let remote = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":2000,"text":"Is the rough placement good enough?"},
+                {"speaker":0,"offsetMilliseconds":20000,"text":"Okay, nice."}]}
+    """.utf8))
+    let local = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1000,"text":"Here is step two."},
+                {"speaker":0,"offsetMilliseconds":10000,"text":"Mostly, yes."},
+                {"speaker":0,"offsetMilliseconds":12000,"text":"Twocan fixes the rest."}]}
+    """.utf8))
+    let answered = MarkdownRenderer.merged([
+        TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete,
+                        text: try SpeechTranscriber.transcript(remote, start: 0, end: 600, track: .system)),
+        TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete,
+                        text: try SpeechTranscriber.transcript(local, start: 0, end: 600, track: .microphone)),
+    ])
+    precondition(answered == """
+    [00:01] Me: Here is step two.
+
+    [00:02] Speaker A: Is the rough placement good enough?
+
+    [00:10] Me: Mostly, yes.
+
+    [00:12] Me: Twocan fixes the rest.
+
+    [00:20] Speaker A: Okay, nice.
+    """, "An answer must stay between the question and the reply that follow it on the other track: \(answered)")
+    let readable = TranscriptPolisher.tidy("## 00:00–10:00\n\n" + answered)
+    precondition(readable.contains("[00:10] Me: Mostly, yes. Twocan fixes the rest."), "The readable transcript joins a speaker's adjacent turns: \(readable)")
+    let monologue = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1000,"text":"First slide."},
+                {"speaker":0,"offsetMilliseconds":240000,"text":"Fifth slide."},
+                {"speaker":0,"offsetMilliseconds":540000,"text":"Questions?"}]}
+    """.utf8))
+    let presented = MarkdownRenderer.merged([
+        TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete, text: "[00:00] Speaker: [no audible speech]"),
+        TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete,
+                        text: try SpeechTranscriber.transcript(monologue, start: 0, end: 600, track: .microphone)),
+    ])
+    precondition(presented == "[00:01] Me: First slide.\n\n[04:00] Me: Fifth slide.\n\n[09:00] Me: Questions?",
+                 "A monologue keeps each phrase's time in the raw transcript: \(presented)")
+    let accepted = TranscriptPolisher.tidy("""
+    ## 00:00–01:00
+
+    [00:01] Speaker A: Please send the table by Friday.
+
+    [00:03] Me: Okay.
+
+    [00:04] Speaker A: Then let's move on.
+    """)
+    precondition(accepted.contains("[00:03] Me: Okay."), "The recording user's short reply is not a backchannel: \(accepted)")
     let script = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, status: .complete, text: "[00:01] Speaker A: 這個 GPU server 還要修。"),
     ])
@@ -47,7 +97,7 @@ func checkSeparateTrackTranscription() async throws {
     precondition(raw.components(separatedBy: "## ").count == 2, "Both tracks must share one section per window")
     precondition(FileManager.default.fileExists(atPath: archived.appending(path: "audio.m4a").path))
     precondition(!FileManager.default.fileExists(atPath: archived.appending(path: "microphone.m4a").path))
-    print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, silence handling")
+    print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, answer order, monologue times, Me replies, silence handling")
 }
 
 /// Collects structured processing progress from any isolation context.

@@ -1,6 +1,6 @@
 # Release notes
 
-## Unreleased
+## 0.2.0
 
 - Azure Speech now distinguishes voices on the microphone track, and the chat microphone prompt asks to transcribe everyone speaking in the room. Online captures label microphone speech `Me`; in-person captures retain anonymous speaker letters and label computer speech `Computer`. See [speaker attribution and limitations](architecture.md#speaker-attribution-from-raw-tracks).
 - Complete captures keep each speech phrase at its own time, including Azure Speech turns within the same displayed second. Earlier builds joined the whole microphone track into one `Me` turn at its first phrase. Azure Speech phrases on a capture track are split at pauses, so a reply sits between the remote sentences around it. When only one track falls back to smaller windows, the transcript follows those windows and interleaves replies within each section.

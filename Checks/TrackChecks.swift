@@ -5,6 +5,7 @@ import Foundation
 /// A complete capture keeps per-track speech and resolves the recording user's label at rendering.
 @MainActor
 func checkSeparateTrackTranscription() async throws {
+    checkTranscriptEcho()
     try checkMicrophoneAttribution()
     checkTranscriptSections()
     let merged = MarkdownRenderer.merged([
@@ -158,6 +159,50 @@ func checkSeparateTrackTranscription() async throws {
         precondition(!FileManager.default.fileExists(atPath: keptArchive.appending(path: name).path), "Unexpected \(name)")
     }
     print("Separate tracks passed: per-track upload, online Me label, timestamp merge, answer order, anonymous monologue times, Me replies and sounds, silence handling, optional original tracks")
+}
+
+private func checkTranscriptEcho() {
+    func capture(system: [TranscriptTurn], microphone: [TranscriptTurn]) -> [TranscriptBlock] {
+        [TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                         text: system.map(\.line).joined(separator: "\n"), turns: system),
+         TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                         text: microphone.map(\.line).joined(separator: "\n"), turns: microphone)]
+    }
+    let system = TranscriptTurn(startMilliseconds: 1000, durationMilliseconds: 3000,
+                                speaker: "Speaker A", text: "Please send the revised table by Friday.")
+    let echo = TranscriptTurn(startMilliseconds: 3800, durationMilliseconds: 1200,
+                              speaker: "Speaker A", text: "BY, friday!")
+    let dropped = MarkdownRenderer.merged(capture(system: [system], microphone: [echo]))
+    precondition(dropped == "[00:01] Speaker A: Please send the revised table by Friday.",
+                 "A microphone echo with eight normalized characters and enough extended overlap must be removed: \(dropped)")
+
+    let reply = TranscriptTurn(startMilliseconds: 4100, durationMilliseconds: 300,
+                               speaker: "Speaker A", text: "by Friday.")
+    let answered = MarkdownRenderer.merged(capture(system: [system], microphone: [reply]))
+    precondition(answered == "[00:01] Speaker A: Please send the revised table by Friday.\n\n[00:04] Me: by Friday.",
+                 "A reply after the actual sentence end must stay, even within the 500 ms extension: \(answered)")
+
+    let unrelated = TranscriptTurn(startMilliseconds: 2000, durationMilliseconds: 1000,
+                                   speaker: "Speaker A", text: "I will check the sample labels.")
+    let simultaneous = MarkdownRenderer.merged(capture(system: [system], microphone: [unrelated]))
+    precondition(simultaneous == "[00:01] Speaker A: Please send the revised table by Friday.\n\n[00:02] Me: I will check the sample labels.",
+                 "Unrelated microphone speech must stay while computer speech plays: \(simultaneous)")
+
+    let cached = capture(system: [system], microphone: [echo]).map { block in
+        var block = block
+        block.turns = nil
+        return block
+    }
+    let untimed = MarkdownRenderer.merged(cached)
+    precondition(untimed == "[00:01] Speaker A: Please send the revised table by Friday.\n\n[00:03] Me: BY, friday!",
+                 "Text-only cached or chat turns have no durations and must stay: \(untimed)")
+    let roomText = String(repeating: "Room discussion. ", count: 100).trimmingCharacters(in: .whitespaces)
+    let room = TranscriptTurn(startMilliseconds: 10_000, durationMilliseconds: 5000,
+                              speaker: "Speaker B", text: roomText)
+    let inPerson = MarkdownRenderer.merged(capture(system: [system], microphone: [echo, room]))
+    precondition(inPerson == "[00:01] Computer: Please send the revised table by Friday.\n\n[00:03] Speaker A: BY, friday!\n\n[00:10] Speaker B: \(roomText)",
+                 "A microphone-only session must keep matching speech even with incidental computer audio: \(inPerson)")
+    print("Transcript echo passed: overlapping copy removed, reply after sentence kept, unrelated speech kept, no-duration and microphone-only speech kept")
 }
 
 private func checkMicrophoneAttribution() throws {

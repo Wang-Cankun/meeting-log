@@ -83,8 +83,10 @@ enum MarkdownRenderer {
     }
 
     private static func merged(_ blocks: [TranscriptBlock], online: Bool) -> String {
+        let systemTurns = online ? blocks.filter { $0.track == .system }.flatMap(\.resolvedTurns) : []
         let turns = blocks.flatMap { block in
-            block.resolvedTurns.map { turn in
+            block.resolvedTurns.compactMap { turn -> TranscriptTurn? in
+                if online, block.track == .microphone, isEcho(turn, systemTurns: systemTurns) { return nil }
                 var turn = turn
                 turn.speaker = simplifiedChinese(turn.speaker)
                 turn.text = simplifiedChinese(turn.text)
@@ -105,6 +107,26 @@ enum MarkdownRenderer {
         let kept = spoken.isEmpty ? Array(turns.prefix(1)) : spoken
         return kept.enumerated().sorted { ($0.element.startMilliseconds, $0.offset) < ($1.element.startMilliseconds, $1.offset) }
             .map(\.element.line).joined(separator: "\n\n")
+    }
+
+    private static func isEcho(_ microphone: TranscriptTurn, systemTurns: [TranscriptTurn]) -> Bool {
+        guard let duration = microphone.durationMilliseconds else { return false }
+        let text = normalizedEchoText(microphone.text)
+        guard text.count >= 8 else { return false }
+        return systemTurns.contains { system in
+            guard let systemDuration = system.durationMilliseconds else { return false }
+            let end = system.startMilliseconds + systemDuration
+            // The trailing allowance must not remove a reply that starts after the sentence.
+            guard microphone.startMilliseconds < end else { return false }
+            let overlap = min(microphone.startMilliseconds + duration, end + 500)
+                - max(microphone.startMilliseconds, system.startMilliseconds)
+            return Double(overlap) >= Double(duration) / 2 && normalizedEchoText(system.text).contains(text)
+        }
+    }
+
+    private static func normalizedEchoText(_ text: String) -> String {
+        simplifiedChinese(text).lowercased()
+            .components(separatedBy: CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines)).joined()
     }
 
     private static func isOnline(_ blocks: [TranscriptBlock]) -> Bool {

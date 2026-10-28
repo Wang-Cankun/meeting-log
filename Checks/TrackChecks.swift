@@ -6,6 +6,7 @@ import Foundation
 @MainActor
 func checkSeparateTrackTranscription() async throws {
     checkTranscriptEcho()
+    try checkPauseSplit()
     try checkMicrophoneAttribution()
     checkTranscriptSections()
     let merged = MarkdownRenderer.merged([
@@ -203,6 +204,30 @@ private func checkTranscriptEcho() {
     precondition(inPerson == "[00:01] Computer: Please send the revised table by Friday.\n\n[00:03] Speaker A: BY, friday!\n\n[00:10] Speaker B: \(roomText)",
                  "A microphone-only session must keep matching speech even with incidental computer audio: \(inPerson)")
     print("Transcript echo passed: overlapping copy removed, reply after sentence kept, unrelated speech kept, no-duration and microphone-only speech kept")
+}
+
+/// Azure returns one speaker's sentences as one phrase even across a long pause; the reply in that pause must sit between them.
+private func checkPauseSplit() throws {
+    let remote = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1000,"durationMilliseconds":3700,"text":"Can you send it by Friday? Great, thanks.",
+      "words":[{"text":"Can","offsetMilliseconds":1000,"durationMilliseconds":150},{"text":"you","offsetMilliseconds":1200,"durationMilliseconds":100},
+               {"text":"send","offsetMilliseconds":1350,"durationMilliseconds":200},{"text":"it","offsetMilliseconds":1600,"durationMilliseconds":100},
+               {"text":"by","offsetMilliseconds":1750,"durationMilliseconds":100},{"text":"Friday?","offsetMilliseconds":1900,"durationMilliseconds":400},
+               {"text":"Great,","offsetMilliseconds":4000,"durationMilliseconds":300},{"text":"thanks.","offsetMilliseconds":4400,"durationMilliseconds":300}]}]}
+    """.utf8))
+    let local = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1760,"durationMilliseconds":2500,"text":"by Friday? Great,"},
+                {"speaker":1,"offsetMilliseconds":2700,"durationMilliseconds":800,"text":"Yes, tomorrow."}]}
+    """.utf8))
+    let system = try SpeechTranscriber.transcript(remote, start: 0, end: 20, track: .system)
+    let microphone = try SpeechTranscriber.transcript(local, start: 0, end: 20, track: .microphone)
+    let rendered = MarkdownRenderer.merged([
+        TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete, text: system.text, turns: system.turns),
+        TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete, text: microphone.text, turns: microphone.turns),
+    ])
+    precondition(rendered == "[00:01] Speaker A: Can you send it by Friday?\n\n[00:02] Me: Yes, tomorrow.\n\n[00:04] Speaker A: Great, thanks.",
+                 "A reply in a remote pause must sit between the split parts, and an echo across the split must go: \(rendered)")
+    print("Pause split passed: remote phrase split at its pause, reply between, echo across the split removed")
 }
 
 private func checkMicrophoneAttribution() throws {

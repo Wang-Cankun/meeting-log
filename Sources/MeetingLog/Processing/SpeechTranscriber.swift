@@ -30,7 +30,7 @@ struct SpeechTranscriber: Sendable {
 
     func transcribe(audio: URL, diarize: Bool, phrases: [String]) async throws -> SpeechResult {
         var definition: [String: Any] = [
-            "enhancedMode": ["enabled": true, "model": Self.model, "modelOptions": ["timestamps": "segment", "transcribeStyle": "clean"]]
+            "enhancedMode": ["enabled": true, "model": Self.model, "modelOptions": ["timestamps": "word", "transcribeStyle": "clean"]]
         ]
         if diarize { definition["diarization"] = ["enabled": true] }
         if !phrases.isEmpty { definition["phraseList"] = ["phrases": phrases] }
@@ -71,7 +71,9 @@ struct SpeechTranscriber: Sendable {
         let phrases = result.phrases
             .map { SpeechResult.Phrase(speaker: $0.speaker, offsetMilliseconds: $0.offsetMilliseconds,
                                        durationMilliseconds: $0.durationMilliseconds,
-                                       text: $0.text.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)) }
+                                       text: $0.text.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces),
+                                       words: $0.words) }
+            .flatMap { track == nil ? [$0] : $0.splitAtPauses() }
             .filter { !$0.text.isEmpty }
             .sorted { $0.offsetMilliseconds < $1.offsetMilliseconds }
         guard !phrases.isEmpty else {
@@ -139,10 +141,42 @@ struct SpeechTranscriber: Sendable {
 
 struct SpeechResult: Decodable, Sendable {
     struct Phrase: Decodable, Sendable {
+        struct Word: Decodable, Sendable {
+            let text: String
+            let offsetMilliseconds: Int
+            let durationMilliseconds: Int?
+        }
         let speaker: Int?
         let offsetMilliseconds: Int
         let durationMilliseconds: Int?
         let text: String
+        var words: [Word]? = nil
+
+        /// Azure keeps one speaker's speech in one phrase across long pauses. On a capture track the other side's
+        /// reply sits in such a pause, so the phrase is split there and the reply can sort between its parts.
+        func splitAtPauses() -> [Phrase] {
+            guard let words, words.count > 1 else { return [self] }
+            var starts: [String.Index] = []
+            var cursor = text.startIndex
+            for word in words {
+                guard let range = text.range(of: word.text, range: cursor..<text.endIndex) else { return [self] }
+                starts.append(range.lowerBound)
+                cursor = range.upperBound
+            }
+            var parts: [Phrase] = []
+            var first = 0
+            for next in 1...words.count {
+                let previous = words[next - 1]
+                let previousEnd = previous.offsetMilliseconds + (previous.durationMilliseconds ?? 0)
+                if next < words.count, words[next].offsetMilliseconds - previousEnd < 500 { continue }
+                let range = (first == 0 ? text.startIndex : starts[first])..<(next < words.count ? starts[next] : text.endIndex)
+                parts.append(Phrase(speaker: speaker, offsetMilliseconds: words[first].offsetMilliseconds,
+                                    durationMilliseconds: previousEnd - words[first].offsetMilliseconds,
+                                    text: text[range].trimmingCharacters(in: .whitespaces)))
+                first = next
+            }
+            return parts
+        }
     }
     let phrases: [Phrase]
 

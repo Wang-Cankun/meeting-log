@@ -113,15 +113,16 @@ enum MarkdownRenderer {
         guard let duration = microphone.durationMilliseconds else { return false }
         let text = normalizedEchoText(microphone.text)
         guard text.count >= 8 else { return false }
-        return systemTurns.contains { system in
+        let end = microphone.startMilliseconds + duration
+        // A turn that starts after a computer turn ends is a reply to it, even within the trailing allowance.
+        // Speech split at pauses can divide one echoed passage between neighbouring computer turns.
+        let playing = systemTurns.filter { system in
             guard let systemDuration = system.durationMilliseconds else { return false }
-            let end = system.startMilliseconds + systemDuration
-            // The trailing allowance must not remove a reply that starts after the sentence.
-            guard microphone.startMilliseconds < end else { return false }
-            let overlap = min(microphone.startMilliseconds + duration, end + 500)
-                - max(microphone.startMilliseconds, system.startMilliseconds)
-            return Double(overlap) >= Double(duration) / 2 && normalizedEchoText(system.text).contains(text)
+            return microphone.startMilliseconds < system.startMilliseconds + systemDuration && end > system.startMilliseconds
         }
+        guard let first = playing.first, let last = playing.last, let lastDuration = last.durationMilliseconds else { return false }
+        let overlap = min(end, last.startMilliseconds + lastDuration + 500) - max(microphone.startMilliseconds, first.startMilliseconds)
+        return Double(overlap) >= Double(duration) / 2 && playing.map { normalizedEchoText($0.text) }.joined().contains(text)
     }
 
     private static func normalizedEchoText(_ text: String) -> String {

@@ -48,7 +48,7 @@ A microphone can record one person or a room conversation, so track origin alone
 Removing an echo only from the readable transcript would leave the wrong attribution in summary evidence. The renderer therefore removes microphone echoes inside the merge, before `MeetingProcessor` writes `transcript_raw.md`. This deterministic rule runs only on the speech path when the session is online. Both timing and wording must qualify:
 
 - Both turns must have durations, and the microphone turn must start before the computer sentence ends. At least half the microphone duration must overlap the computer interval, extended by 500 ms at its end.
-- Normalize both texts by lowercasing and removing punctuation and whitespace. The normalized microphone text must have at least 8 characters and occur as a contiguous substring of the normalized computer text.
+- Normalize both texts by lowercasing and removing punctuation and whitespace. The normalized microphone text must have at least 8 characters and occur as a contiguous substring of the normalized text of the computer turns it overlaps, joined in time order, because a pause can split one echoed passage between two computer turns.
 
 A reply starting at or after the actual computer sentence end stays, even if it repeats the last words within the trailing allowance. Unrelated speech stays too. This rule never removes turns without durations, including chat-model output and legacy text-only caches. The chat microphone prompt still asks to omit loudspeaker echoes, and its cleanup removes nearby repeated `Me` turns.
 

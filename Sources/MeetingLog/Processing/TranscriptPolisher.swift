@@ -39,8 +39,7 @@ enum TranscriptPolisher {
         func flush() {
             var turns = mergingSpeakers(run)
             turns = turns.enumerated().filter { index, turn in
-                // The recording user's own "Okay." can accept a task, so Me turns are never treated as backchannels.
-                guard isBackchannel(turn.text), turn.speaker != "Me", index > 0, index + 1 < turns.count else { return true }
+                guard isBackchannel(turn.text, speaker: turn.speaker), index > 0, index + 1 < turns.count else { return true }
                 // A short reply to a question is an answer, not a backchannel.
                 let previous = turns[index - 1].text
                 return turns[index - 1].speaker != turns[index + 1].speaker || previous.hasSuffix("?") || previous.hasSuffix("？")
@@ -67,9 +66,8 @@ enum TranscriptPolisher {
     private static let turnPattern = try! NSRegularExpression(pattern: #"^\[(\d{2,}:[0-5]\d)\] ([^:\n]+): (.+)$"#)
     private static let fillerPattern = try! NSRegularExpression(
         pattern: #"(?:,\s*)?(?<![\w-])(?:um+|uh+|erm+|ah+)(?![\w-])[.,…]*\s*|呃[，,、…]*|^嗯[，,、…]+"#, options: .caseInsensitive)
-    private static let backchannelWords: Set<String> = [
-        "mm", "mmm", "hmm", "mhm", "mm-hmm", "uh-huh", "yeah", "yes", "yep", "okay", "ok", "right", "sure", "oh",
-    ]
+    private static let soundWords: Set<String> = ["mm", "mmm", "hmm", "mhm", "mm-hmm", "uh-huh", "oh"]
+    private static let assentWords: Set<String> = ["yeah", "yes", "yep", "okay", "ok", "right", "sure"]
 
     private static func withoutFillers(_ text: String) -> String {
         let stripped = fillerPattern.stringByReplacingMatches(
@@ -80,12 +78,16 @@ enum TranscriptPolisher {
         return spaced.drop { ",.;:…，。".contains($0) || $0 == " " }.trimmingCharacters(in: .whitespaces)
     }
 
-    private static func isBackchannel(_ text: String) -> Bool {
+    /// The recording user's "Okay." or "对" can accept a task, so a Me turn qualifies only when every token is a sound.
+    private static func isBackchannel(_ text: String, speaker: String) -> Bool {
         let tokens = text.lowercased()
             .components(separatedBy: CharacterSet.punctuationCharacters.subtracting(CharacterSet(charactersIn: "-")).union(.whitespaces))
             .filter { !$0.isEmpty }
-        return !tokens.isEmpty && tokens.allSatisfy {
-            backchannelWords.contains($0) || $0.range(of: #"^[嗯对好是]+$"#, options: .regularExpression) != nil
+        let sound = { (token: String) in soundWords.contains(token) || token.range(of: #"^嗯+$"#, options: .regularExpression) != nil }
+        guard !tokens.isEmpty else { return false }
+        if speaker == "Me" { return tokens.allSatisfy(sound) }
+        return tokens.allSatisfy {
+            sound($0) || assentWords.contains($0) || $0.range(of: #"^[嗯对好是]+$"#, options: .regularExpression) != nil
         }
     }
 

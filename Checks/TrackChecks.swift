@@ -67,6 +67,27 @@ func checkSeparateTrackTranscription() async throws {
     [00:04] Speaker A: Then let's move on.
     """)
     precondition(accepted.contains("[00:03] Me: Okay."), "The recording user's short reply is not a backchannel: \(accepted)")
+    let listened = TranscriptPolisher.tidy("""
+    ## 00:00–01:00
+
+    [00:01] Speaker A: The first batch failed.
+
+    [00:05] Me: Mm-hmm.
+
+    [00:06] Speaker A: So we reran it overnight.
+
+    [00:09] Me: Mm, okay.
+
+    [00:10] Speaker A: Please check the logs.
+
+    [00:12] Me: 好的。
+
+    [00:13] Speaker A: Thanks.
+    """)
+    precondition(listened.contains("[00:01] Speaker A: The first batch failed. So we reran it overnight.") && !listened.contains("Mm-hmm"),
+                 "The recording user's wordless sound between one speaker's turns is a backchannel: \(listened)")
+    precondition(listened.contains("[00:09] Me: Mm, okay.") && listened.contains("[00:12] Me: 好的。"),
+                 "A Me turn with any assent word stays: \(listened)")
     let script = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, status: .complete, text: "[00:01] Speaker A: 這個 GPU server 還要修。"),
     ])
@@ -97,7 +118,7 @@ func checkSeparateTrackTranscription() async throws {
     precondition(raw.components(separatedBy: "## ").count == 2, "Both tracks must share one section per window")
     precondition(FileManager.default.fileExists(atPath: archived.appending(path: "audio.m4a").path))
     precondition(!FileManager.default.fileExists(atPath: archived.appending(path: "microphone.m4a").path))
-    print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, answer order, monologue times, Me replies, silence handling")
+    print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, answer order, monologue times, Me replies and sounds, silence handling")
 }
 
 /// Collects structured processing progress from any isolation context.

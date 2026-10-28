@@ -23,22 +23,53 @@ enum MarkdownRenderer {
             offset += part.duration
         }
         var nextPart = 0
-        var windows: [[TranscriptBlock]] = []
-        for block in blocks {
-            if let last = windows.last?.first, last.startSeconds == block.startSeconds, block.track != nil {
-                windows[windows.count - 1].append(block)
+        let covering = Set(blocks.indices.filter { index in
+            let block = blocks[index]
+            guard let track = block.track else { return false }
+            return blocks.filter {
+                $0.track != nil && $0.track != track && $0.startSeconds >= block.startSeconds && $0.endSeconds <= block.endSeconds
+            }.count > 1
+        })
+        var windows: [(indices: [Int], blocks: [TranscriptBlock])] = []
+        for index in blocks.indices where !covering.contains(index) {
+            let block = blocks[index]
+            if let last = windows.last?.indices.first, blocks[last].startSeconds == block.startSeconds,
+               blocks[last].track != nil, block.track != nil {
+                windows[windows.count - 1].indices.append(index)
             } else {
-                windows.append([block])
+                windows.append(([index], []))
+            }
+        }
+        for (index, block) in blocks.enumerated() {
+            if let window = windows.firstIndex(where: { $0.indices.contains(index) }) {
+                windows[window].blocks.append(block)
+                continue
+            }
+            let targets = windows.indices.filter { index in
+                let finer = blocks[windows[index].indices[0]]
+                return finer.track != nil && finer.track != block.track
+                    && finer.startSeconds >= block.startSeconds && finer.endSeconds <= block.endSeconds
+            }
+            var turnsByWindow: [Int: [TranscriptTurn]] = [:]
+            for turn in block.resolvedTurns {
+                if let target = targets.last(where: { turn.startMilliseconds >= Int(blocks[windows[$0].indices[0]].startSeconds * 1000) }) {
+                    turnsByWindow[target, default: []].append(turn)
+                }
+            }
+            for target in targets {
+                var portion = block
+                portion.turns = turnsByWindow[target] ?? []
+                windows[target].blocks.append(portion)
             }
         }
         for window in windows {
-            let block = window[0]
+            let block = blocks[window.indices[0]]
             if nextPart < boundaries.count, block.startSeconds >= boundaries[nextPart].0 - 0.01 {
                 output += boundaries[nextPart].1
                 nextPart += 1
             }
             let heading = parts.isEmpty ? "##" : "###"
-            output += "\(heading) \(clock(block.startSeconds))–\(clock(block.endSeconds))\n\n\(merged(window))\n\n"
+            output += "\(heading) \(clock(block.startSeconds))–\(clock(block.endSeconds))\n\n\(merged(window.blocks))\n\n"
         }
         return output
     }

@@ -5,6 +5,7 @@ import Foundation
 /// A complete capture transcribes microphone and computer audio separately and labels the microphone Me.
 @MainActor
 func checkSeparateTrackTranscription() async throws {
+    checkTranscriptSections()
     let merged = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete,
                         text: "[00:02] Speaker A: Can you hear me?\n\n[00:09] Speaker B: Next item."),
@@ -156,6 +157,63 @@ func checkSeparateTrackTranscription() async throws {
         precondition(!FileManager.default.fileExists(atPath: keptArchive.appending(path: name).path), "Unexpected \(name)")
     }
     print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, answer order, monologue times, Me replies and sounds, silence handling, optional original tracks")
+}
+
+private func checkTranscriptSections() {
+    let ranges = [(0.0, 600.0), (590.0, 1200.0), (1190.0, 1800.0)]
+    let questions = [
+        "[00:02] Speaker A: First question?",
+        "[09:52] Speaker A: Second question?",
+        "[19:52] Speaker A: Third question?",
+    ]
+    let replies = [
+        "[00:03] Me: First reply.",
+        "[09:53] Me: Second reply.",
+        "[19:53] Me: Third reply.",
+    ]
+    let microphoneWindows = ranges.enumerated().map { index, range in
+        TranscriptBlock(id: index * 2 + 1, startSeconds: range.0, endSeconds: range.1,
+                        track: .microphone, status: .complete, text: replies[index])
+    }
+    let sections: (String) -> [String] = {
+        $0.components(separatedBy: "\n## ").dropFirst().map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+    let expected = [
+        "00:00–10:00\n\n[00:02] Speaker A: First question?\n\n[00:03] Me: First reply.",
+        "09:50–20:00\n\n[09:52] Speaker A: Second question?\n\n[09:53] Me: Second reply.",
+        "19:50–30:00\n\n[19:52] Speaker A: Third question?\n\n[19:53] Me: Third reply.",
+    ]
+    let system = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 1800, track: .system, status: .complete,
+                                 text: questions.joined(separator: "\n"))
+    let raw = MarkdownRenderer.transcript(blocks: [system] + microphoneWindows)
+    precondition(sections(raw) == expected, "The finer microphone windows must define bounds and interleave each reply: \(raw)")
+
+    let openings = [
+        "[00:01] Speaker A: First opening.\n[00:03] Speaker A: First closing.",
+        "[09:51] Speaker A: Second opening.\n[09:53] Speaker A: Second closing.",
+        "[19:51] Speaker A: Third opening.\n[19:53] Speaker A: Third closing.",
+    ]
+    let systemWindows = ranges.enumerated().map { index, range in
+        TranscriptBlock(id: index * 2, startSeconds: range.0, endSeconds: range.1,
+                        track: .system, status: .complete, text: openings[index])
+    }
+    let microphone = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 1800, track: .microphone, status: .complete,
+                                     text: "[00:02] Me: First prompt.\n[09:52] Me: Second prompt.\n[19:52] Me: Third prompt.")
+    let reverse = MarkdownRenderer.transcript(blocks: [microphone] + systemWindows)
+    let readable = TranscriptPolisher.tidy(reverse)
+    precondition(sections(readable) == [
+        "00:00–10:00\n\n[00:01] Speaker A: First opening.\n\n[00:02] Me: First prompt.\n\n[00:03] Speaker A: First closing.",
+        "09:50–20:00\n\n[09:51] Speaker A: Second opening.\n\n[09:52] Me: Second prompt.\n\n[09:53] Speaker A: Second closing.",
+        "19:50–30:00\n\n[19:51] Speaker A: Third opening.\n\n[19:52] Me: Third prompt.\n\n[19:53] Speaker A: Third closing.",
+    ], "The finer system windows must keep Speaker A separate across headings through tidy: \(readable)")
+
+    let equalBlocks = microphoneWindows.enumerated().flatMap { index, microphone in
+        [TranscriptBlock(id: index * 2, startSeconds: microphone.startSeconds, endSeconds: microphone.endSeconds,
+                         track: .system, status: .complete, text: questions[index]), microphone]
+    }
+    let equal = MarkdownRenderer.transcript(blocks: equalBlocks)
+    precondition(sections(equal) == expected, "Equal windows must retain their paired sections: \(equal)")
+    print("Transcript sections passed: finer microphone bounds, reverse fallback speaker scopes, equal-window pairing")
 }
 
 /// Collects structured processing progress from any isolation context.

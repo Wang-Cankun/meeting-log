@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Complete captures transcribed with Azure Speech keep each microphone phrase at its own time between the turns of other speakers. Earlier builds joined the whole microphone track into one `Me` turn at its first phrase. The readable transcript no longer drops the recording user's short replies, such as "Okay.", as backchannels; it still drops their wordless sounds, such as "Mm-hmm.", between two turns of another speaker.
-- Archived meetings keep their transcripts, and archiving removes the separate tracks. Re-importing an archived `audio.m4a` transcribes the mixed audio with diarization, so the recording user becomes a lettered speaker instead of `Me`. A session whose microphone track was transcribed before this fix keeps its joined `Me` turn when retried.
+- Archived meetings keep their transcripts, and archiving removes the separate tracks unless **Keep original audio tracks** is on. Re-importing an archived `audio.m4a` transcribes the mixed audio with diarization, so the recording user becomes a lettered speaker instead of `Me`. A session whose microphone track was transcribed before this fix keeps its joined `Me` turn when retried.
+- Turn on **Keep original audio tracks** in Settings → Projects & storage to keep each recording's separate microphone and computer audio in its meeting folder. It is off by default; computer audio takes about 1.4 GB per recorded hour.
 
 ## 0.1.0
 

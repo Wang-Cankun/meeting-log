@@ -19,6 +19,7 @@
 | Recoverable meeting deletion | accepted | The main panel lists three recent completed meetings below any pending ones; clicking a meeting opens it in Meeting summaries, and its action menu holds Regenerate, Move, Show in Finder and Move to Trash. Deleted meetings move to the macOS Trash with Undo; Settings moves discarded pending sessions to the Trash as well |
 | Markdown owns project context | accepted | `<project>/meeting_context.md` supplies names, jargon, aliases, and project-specific instructions |
 | Compressed media is retained | accepted | Temporary chunks and imported original copies are deleted only after the final audio and Markdown archive succeeds |
+| Original capture tracks are optional | accepted | Archiving removes `system-audio.caf` and `microphone.m4a` by default, because uncompressed computer audio takes about 1.4 GB per hour. A Storage setting keeps both unchanged, so a later transcription fix can be applied to the separate tracks. Imports are unaffected: the app never removes the user's source file |
 | Zero third-party packages | accepted | A new package requires an observed missing native capability |
 | Independent audio and video scope | accepted | System audio selects all Mac audio or one application; the Apple picker selects optional screen video |
 | Plain app-preference API key | accepted | The personal app stores its configured API key unencrypted in the current user's preferences instead of Keychain |

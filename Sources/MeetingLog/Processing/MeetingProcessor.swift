@@ -7,6 +7,8 @@ struct MeetingProcessor {
     let client: ProviderClient?
     /// When set, a speech service transcribes audio and the provider handles only text steps.
     var speech: SpeechTranscriber? = nil
+    /// Keeps the separate capture tracks in the archived meeting; the computer-audio track is uncompressed.
+    var keepsOriginalAudio = false
     var progress: @Sendable (ProcessingProgress) -> Void = { _ in }
 
     func process(directory: URL, manifest original: SessionManifest, projectName: String?) async throws -> URL {
@@ -174,7 +176,7 @@ struct MeetingProcessor {
         try? FileManager.default.removeItem(at: destination.appending(path: "parts"))
         try? FileManager.default.removeItem(at: destination.appending(path: "coverage.json"))
         try? FileManager.default.removeItem(at: destination.appending(path: "session.json"))
-        if preparation?.retainsRawTracks != true {
+        if !keepsOriginalAudio, preparation?.retainsRawTracks != true {
             try? FileManager.default.removeItem(at: destination.appending(path: "system-audio.caf"))
             try? FileManager.default.removeItem(at: destination.appending(path: "microphone.m4a"))
         }

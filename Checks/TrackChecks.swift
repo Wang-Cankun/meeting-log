@@ -118,7 +118,23 @@ func checkSeparateTrackTranscription() async throws {
     precondition(raw.components(separatedBy: "## ").count == 2, "Both tracks must share one section per window")
     precondition(FileManager.default.fileExists(atPath: archived.appending(path: "audio.m4a").path))
     precondition(!FileManager.default.fileExists(atPath: archived.appending(path: "microphone.m4a").path))
-    print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, answer order, monologue times, Me replies and sounds, silence handling")
+    precondition(!FileManager.default.fileExists(atPath: archived.appending(path: "system-audio.caf").path))
+
+    let (kept, keptManifest) = try store.createPendingSession(videoEnabled: false, microphoneID: "fixture")
+    try writeTone(to: kept.appending(path: "system-audio.caf"), seconds: 20, fileType: .caf)
+    try writeTone(to: kept.appending(path: "microphone.m4a"), seconds: 15, fileType: .m4a)
+    let keptPreparation = try await CapturePreparation.prepare(in: kept)
+    precondition(keptPreparation.mode == .complete)
+    let keptArchive = try await MeetingProcessor(store: store, client: provider, keepsOriginalAudio: true)
+        .process(directory: kept, manifest: keptManifest, projectName: project.name)
+    precondition(keptArchive != archived)
+    for name in ["system-audio.caf", "microphone.m4a", "audio.m4a", "transcript_raw.md"] {
+        precondition(FileManager.default.fileExists(atPath: keptArchive.appending(path: name).path), "Missing kept \(name)")
+    }
+    for name in ["capture.mov", "chunks", "coverage.json", "session.json"] {
+        precondition(!FileManager.default.fileExists(atPath: keptArchive.appending(path: name).path), "Unexpected \(name)")
+    }
+    print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, answer order, monologue times, Me replies and sounds, silence handling, optional original tracks")
 }
 
 /// Collects structured processing progress from any isolation context.

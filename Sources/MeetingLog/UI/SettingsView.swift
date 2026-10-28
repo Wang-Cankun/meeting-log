@@ -116,6 +116,13 @@ struct SettingsView: View {
                             .disabled(archiveBusy || model.pendingMeetingsExist)
                     }
                 }
+                VStack(alignment: .leading, spacing: 5) {
+                    Toggle("Keep original audio tracks", isOn: Binding(get: { model.keepsOriginalAudio },
+                                                                      set: { model.setKeepsOriginalAudio($0) }))
+                    Text("Each meeting folder keeps its microphone and computer audio as separate files, about 1.4 GB per recorded hour.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if model.pendingMeetingsExist {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Some recordings are waiting for processing. Finish them before changing the archive folder.")

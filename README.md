@@ -13,7 +13,7 @@ The destination project stays locked while starting, recording, and stopping. If
 
 Settings tests JSON output and sends one second of generated silence to the selected transcription service. Both services must pass before any configuration changes are saved or pending recordings resume. Failed tests keep your previous configuration. With MAI, the summary model needs text support only; without MAI, its audio input is tested too. With AI summaries on you always need a summary provider. With them off, only Azure Speech is tested and saved; a saved summary provider is kept, unused, for when summaries are turned back on. All of this setup is available in Settings, with no configuration files or shell commands. Changing the transcription selection takes effect after **Test & save** succeeds.
 
-Failed recordings stay local. **Retry** resumes their recovery, and **Show files** opens the pending recordings, even when a disk error prevented saving the failure status. If recovery can use only system audio, the completed meeting shows a partial-recovery warning and keeps both original tracks for manual recovery.
+Failed recordings stay local. **Retry** resumes their recovery, and **Show files** opens the pending recordings, even when a disk error prevented saving the failure status. If recovery can use only system audio, the completed meeting shows a partial-recovery warning and keeps both original tracks for manual recovery. To keep them for every recording, turn on **Keep original audio tracks** in Settings → Projects & storage.
 
 ## Routes
 

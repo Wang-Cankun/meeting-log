@@ -41,6 +41,7 @@ final class AppModel: ObservableObject {
     @Published var speechEndpoint = UserDefaults.standard.string(forKey: "speechEndpoint") ?? ""
     @Published var speechKey = UserDefaults.standard.string(forKey: "speechAPIKey") ?? ""
     @Published var summariesEnabled = UserDefaults.standard.object(forKey: "summariesEnabled") as? Bool ?? true
+    @Published private(set) var keepsOriginalAudio = UserDefaults.standard.bool(forKey: "keepOriginalAudio")
     @Published var archiveRootPath = UserDefaults.standard.string(forKey: ArchiveStore.rootDefaultsKey) ?? AppModel.defaultArchiveURL.path
     @Published var applications: [CaptureApplication] = []
     @Published var selectedSystemAudioBundleID: String?
@@ -300,6 +301,11 @@ final class AppModel: ObservableObject {
         selectedMicrophoneID = id
         UserDefaults.standard.set(id, forKey: "microphoneID")
         schedulePreviewStart()
+    }
+
+    func setKeepsOriginalAudio(_ keeps: Bool) {
+        keepsOriginalAudio = keeps
+        UserDefaults.standard.set(keeps, forKey: "keepOriginalAudio")
     }
 
     func setMicrophoneEnabled(_ enabled: Bool) {
@@ -919,7 +925,8 @@ final class AppModel: ObservableObject {
         let processor = MeetingProcessor(
             store: job.store,
             client: job.summaries ? ProviderClient(baseURL: job.baseURL, apiKey: job.key, model: job.model) : nil,
-            speech: job.speech
+            speech: job.speech,
+            keepsOriginalAudio: keepsOriginalAudio
         ) { [weak self] progress in
             Task { @MainActor in
                 // A late callback from a finished job must not overwrite the next job.

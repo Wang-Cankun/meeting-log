@@ -10,7 +10,7 @@ enum MarkdownRenderer {
         if blocks.contains(where: { $0.track != nil }) {
             output += online
                 ? "Turns labeled \(TranscriptTurn.recordingUser) come from the recording user's microphone. Other speakers come from computer audio; their letters are anonymous within each section.\n\n"
-                : "This meeting was captured by the microphone only. Speaker letters are anonymous within each section.\n\n"
+                : "Speakers below were recorded by the microphone; their letters are anonymous within each section. Turns labeled Computer come from computer audio.\n\n"
         }
         var offset = 0.0
         var boundaries: [(Double, String)] = []

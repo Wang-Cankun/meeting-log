@@ -171,7 +171,7 @@ private func checkMicrophoneAttribution() throws {
                                      text: transcript.text, turns: transcript.turns)
     let silent = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
                                 text: "[00:00] Speaker: [no audible speech]")
-    let intro = "This meeting was captured by the microphone only. Speaker letters are anonymous within each section."
+    let intro = "Speakers below were recorded by the microphone; their letters are anonymous within each section. Turns labeled Computer come from computer audio."
     let inPerson = MarkdownRenderer.transcript(blocks: [silent, microphone])
     precondition(inPerson.contains(intro) && inPerson.contains("[00:01] Speaker A: First voice.\n\n[00:03] Speaker B: Second voice.\n\n[00:07] Speaker C: Third voice."),
                  "An in-person capture must keep each microphone voice and timestamp: \(inPerson)")

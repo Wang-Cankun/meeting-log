@@ -2,9 +2,10 @@ import Synchronization
 import AVFoundation
 import Foundation
 
-/// A complete capture transcribes microphone and computer audio separately and labels the microphone Me.
+/// A complete capture keeps per-track speech and resolves the recording user's label at rendering.
 @MainActor
 func checkSeparateTrackTranscription() async throws {
+    try checkMicrophoneAttribution()
     checkTranscriptSections()
     let merged = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete,
@@ -77,8 +78,8 @@ func checkSeparateTrackTranscription() async throws {
         TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete,
                         text: try SpeechTranscriber.transcript(monologue, start: 0, end: 600, track: .microphone).text),
     ])
-    precondition(presented == "[00:01] Me: First slide.\n\n[04:00] Me: Fifth slide.\n\n[09:00] Me: Questions?",
-                 "A monologue keeps each phrase's time in the raw transcript: \(presented)")
+    precondition(presented == "[00:01] Speaker A: First slide.\n\n[04:00] Speaker A: Fifth slide.\n\n[09:00] Speaker A: Questions?",
+                 "A microphone-only monologue keeps its anonymous speaker and each phrase's time: \(presented)")
     let accepted = TranscriptPolisher.tidy("""
     ## 00:00–01:00
 
@@ -156,7 +157,64 @@ func checkSeparateTrackTranscription() async throws {
     for name in ["capture.mov", "chunks", "coverage.json", "session.json"] {
         precondition(!FileManager.default.fileExists(atPath: keptArchive.appending(path: name).path), "Unexpected \(name)")
     }
-    print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, answer order, monologue times, Me replies and sounds, silence handling, optional original tracks")
+    print("Separate tracks passed: per-track upload, online Me label, timestamp merge, answer order, anonymous monologue times, Me replies and sounds, silence handling, optional original tracks")
+}
+
+private func checkMicrophoneAttribution() throws {
+    let phrases = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1000,"text":"First voice."},
+                {"speaker":1,"offsetMilliseconds":3000,"text":"Second voice."},
+                {"speaker":2,"offsetMilliseconds":7000,"text":"Third voice."}]}
+    """.utf8))
+    let transcript = try SpeechTranscriber.transcript(phrases, start: 0, end: 20, track: .microphone)
+    let microphone = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                                     text: transcript.text, turns: transcript.turns)
+    let silent = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                                text: "[00:00] Speaker: [no audible speech]")
+    let intro = "This meeting was captured by the microphone only. Speaker letters are anonymous within each section."
+    let inPerson = MarkdownRenderer.transcript(blocks: [silent, microphone])
+    precondition(inPerson.contains(intro) && inPerson.contains("[00:01] Speaker A: First voice.\n\n[00:03] Speaker B: Second voice.\n\n[00:07] Speaker C: Third voice."),
+                 "An in-person capture must keep each microphone voice and timestamp: \(inPerson)")
+
+    let system = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                                 text: "[00:02] Speaker A: Remote discussion before the next agenda item.")
+    let online = MarkdownRenderer.transcript(blocks: [system, microphone])
+    precondition(online.contains("Turns labeled Me come from the recording user's microphone.") && online.contains("[00:01] Me: First voice.\n\n[00:02] Speaker A: Remote discussion before the next agenda item.\n\n[00:03] Me: Second voice.\n\n[00:07] Me: Third voice."), online)
+
+    let discussion = String(repeating: "Room discussion. ", count: 80).trimmingCharacters(in: .whitespaces)
+    let room = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                               text: "[00:01] Speaker A: \(discussion)\n[00:03] Speaker A: Continue in the room.")
+    let notification = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                                       text: "[00:02] Speaker A: Ding.")
+    let incidental = TranscriptPolisher.tidy(MarkdownRenderer.transcript(blocks: [notification, room]))
+    precondition(incidental.contains(intro) && incidental.contains("[00:01] Speaker A: \(discussion)\n\n[00:02] Computer: Ding.\n\n[00:03] Speaker A: Continue in the room."),
+                 "Incidental computer speech must stay separate from a room voice through tidy: \(incidental)")
+
+    let presentation = String(repeating: "Presentation detail. ", count: 200).trimmingCharacters(in: .whitespaces)
+    let questions = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 1800, track: .system, status: .complete,
+                                    text: "[00:05] Speaker A: Could you explain the first measurement again?\n[00:08] Speaker A: Which samples will you compare in the next batch?\n[00:12] Speaker A: When will the remaining analysis results be ready?")
+    let windows = [(0.0, 600.0, "[00:01]"), (590.0, 1200.0, "[10:01]"), (1190.0, 1800.0, "[20:01]")]
+    let presentationBlocks = windows.enumerated().map { index, window in
+        TranscriptBlock(id: index + 1, startSeconds: window.0, endSeconds: window.1,
+                        track: .microphone, status: .complete, text: "\(window.2) Speaker A: \(presentation)")
+    }
+    let remoteQuestions = MarkdownRenderer.transcript(blocks: [questions] + presentationBlocks)
+    precondition(remoteQuestions.contains("Turns labeled Me come from the recording user's microphone.")
+                 && windows.allSatisfy { remoteQuestions.contains("\($0.2) Me: \(presentation)") },
+                 "Over 100 computer-speech characters must keep every section online, including sections with no remote question: \(remoteQuestions)")
+
+    let silentMicrophone = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                                          text: "[00:00] Me: [no audible speech]")
+    precondition(MarkdownRenderer.merged([silentMicrophone]) == "[00:00] Speaker: [no audible speech]")
+
+    let prompt = Prompts.transcription(context: "", start: 0, end: 20, track: .microphone)
+    precondition(prompt.contains("Source: the recording user's own microphone")
+                 && prompt.contains("Speaker A, Speaker B") && prompt.contains("everyone speaking in the room")
+                 && prompt.contains("new turn at each pause or change of speaker")
+                 && prompt.contains("[MM:SS] Speaker A: Spoken words.")
+                 && prompt.contains("[00:00] Speaker: [no audible speech]")
+                 && !prompt.contains("Label every turn Me") && !prompt.contains("nearby primary voice"), prompt)
+    print("Microphone attribution passed: anonymous room voices, online Me, incidental computer speech, session-wide online test, microphone prompt")
 }
 
 private func checkTranscriptSections() {
@@ -213,7 +271,21 @@ private func checkTranscriptSections() {
     }
     let equal = MarkdownRenderer.transcript(blocks: equalBlocks)
     precondition(sections(equal) == expected, "Equal windows must retain their paired sections: \(equal)")
-    print("Transcript sections passed: finer microphone bounds, reverse fallback speaker scopes, equal-window pairing")
+
+    let roomWindows = systemWindows.map { block in
+        var block = block
+        block.track = .microphone
+        return block
+    }
+    let silentSystem = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 1800, track: .system, status: .complete,
+                                       text: "[00:00] Speaker: [no audible speech]")
+    let room = TranscriptPolisher.tidy(MarkdownRenderer.transcript(blocks: [silentSystem] + roomWindows))
+    precondition(sections(room) == [
+        "00:00–10:00\n\n[00:01] Speaker A: First opening. First closing.",
+        "09:50–20:00\n\n[09:51] Speaker A: Second opening. Second closing.",
+        "19:50–30:00\n\n[19:51] Speaker A: Third opening. Third closing.",
+    ], "In-person fallback windows must keep their own Speaker A through tidy: \(room)")
+    print("Transcript sections passed: finer microphone bounds, reverse fallback speaker scopes, equal-window pairing, in-person speaker scopes")
 }
 
 /// Collects structured processing progress from any isolation context.
@@ -274,7 +346,7 @@ private final class TrackFixture: URLProtocol, @unchecked Sendable {
         let content: String
         if parts.contains(where: { $0["type"] as? String == "input_audio" }) {
             if prompt.contains("Source: the recording user's own microphone") {
-                // The model's label is ignored; the track determines Me.
+                // Computer speech makes this capture online; the renderer assigns Me.
                 content = "[00:04] Speaker A: Local reply."
             } else {
                 precondition(prompt.contains("Source: the computer's audio output"))

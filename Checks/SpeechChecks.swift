@@ -15,11 +15,13 @@ func checkSpeechTranscription() async throws {
     let text = try SpeechTranscriber.transcript(decoded, start: 0, end: 20, track: nil).text
     precondition(text == "[00:01] Speaker A: Hello team.\n\n[00:04] Speaker B: Hi.\n\n[00:07] Speaker A: Let's start. Agenda first.\n\n[00:19] Speaker B: Late.", text)
     let offset = try SpeechTranscriber.transcript(decoded, start: 600, end: 620, track: .microphone).text
-    precondition(offset == "[10:01] Me: Hello team.\n\n[10:04] Me: Hi.\n\n[10:07] Me: Let's start.\n\n[10:09] Me: Agenda first.\n\n[10:19] Me: Late.",
-                 "Microphone turns are always Me and keep their own times: \(offset)")
+    precondition(offset == "[10:01] Speaker A: Hello team.\n\n[10:04] Speaker B: Hi.\n\n[10:07] Speaker A: Let's start.\n\n[10:09] Speaker A: Agenda first.\n\n[10:19] Speaker B: Late.",
+                 "Microphone phrases keep speaker letters and individual times before rendering: \(offset)")
     let silent = try JSONDecoder().decode(SpeechResult.self, from: Data("{}".utf8))
     let silence = try SpeechTranscriber.transcript(silent, start: 0, end: 5, track: nil).text
     precondition(silence == "[00:00] Speaker: [no audible speech]")
+    let microphoneSilence = try SpeechTranscriber.transcript(silent, start: 0, end: 5, track: .microphone).text
+    precondition(microphoneSilence == "[00:00] Speaker: [no audible speech]")
     let untimed = try JSONDecoder().decode(SpeechResult.self, from: Data("""
     {"phrases":[{"speaker":0,"offsetMilliseconds":0,"text":"One."},{"speaker":1,"offsetMilliseconds":0,"text":"Two."}]}
     """.utf8))
@@ -145,7 +147,8 @@ func checkSpeechTranscription() async throws {
         }
     }).process(directory: fallback, manifest: fallbackManifest, projectName: project.name)
     state = SpeechFixture.snapshot()
-    precondition(state.speechRequests == 4, "Two whole-track requests, one fails, then two windows: \(state)")
+    precondition(state.speechRequests == 4 && state.diarized == 4,
+                 "Both capture tracks and the two fallback windows must request diarization: \(state)")
     guard let splitData = checkpoints.withLock({ $0.first }) else { preconditionFailure("Missing split checkpoint") }
     let split = try JSONDecoder().decode([TranscriptBlock].self, from: splitData)
     guard let completed = split.first(where: { $0.status == .complete }) else { preconditionFailure("Lost completed sibling") }
@@ -162,7 +165,7 @@ func checkSpeechTranscription() async throws {
     precondition(legacy[0].resolvedTurns[0].startMilliseconds == 12_000 && legacy[0].resolvedTurns[0].text == "Cached.",
                  "Coverage without structured turns must decode and resolve its text")
     print("Speech turn metadata passed: millisecond clamp, durations, fallback checkpoints, legacy coverage")
-    print("Speech transcription passed: diarized letters, Me track, timing guard, context phrases, whole-file request, window fallback, temperature retry")
+    print("Speech transcription passed: diarized letters and microphone, timing guard, context phrases, whole-file request, window fallback, temperature retry")
 }
 
 /// With AI summaries off, the processor archives Azure Speech transcripts without any chat request.

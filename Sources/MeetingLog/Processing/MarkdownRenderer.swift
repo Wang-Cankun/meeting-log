@@ -2,12 +2,15 @@ import Foundation
 
 enum MarkdownRenderer {
     static func transcript(blocks: [TranscriptBlock], parts: [ImportedAudioPart] = []) -> String {
+        let online = isOnline(blocks)
         var output = "# Transcript\n\n"
         if !parts.isEmpty {
             output += "These are separate recordings grouped by the user. File order is playback order, not evidence of continuous conversation. Gaps and real-world chronology are unknown; do not invent missing discussion. Times below refer to the combined audio.\n\n"
         }
         if blocks.contains(where: { $0.track != nil }) {
-            output += "Turns labeled \(TranscriptTurn.recordingUser) come from the recording user's microphone. Other speakers come from computer audio; their letters are anonymous within each section.\n\n"
+            output += online
+                ? "Turns labeled \(TranscriptTurn.recordingUser) come from the recording user's microphone. Other speakers come from computer audio; their letters are anonymous within each section.\n\n"
+                : "This meeting was captured by the microphone only. Speaker letters are anonymous within each section.\n\n"
         }
         var offset = 0.0
         var boundaries: [(Double, String)] = []
@@ -23,8 +26,8 @@ enum MarkdownRenderer {
             offset += part.duration
         }
         var nextPart = 0
-        let covering = Set(blocks.indices.filter { index in
-            let block = blocks[index]
+        let covering = Set(blocks.indices.filter { blockIndex in
+            let block = blocks[blockIndex]
             guard let track = block.track else { return false }
             return blocks.filter {
                 $0.track != nil && $0.track != track && $0.startSeconds >= block.startSeconds && $0.endSeconds <= block.endSeconds
@@ -45,8 +48,8 @@ enum MarkdownRenderer {
                 windows[window].blocks.append(block)
                 continue
             }
-            let targets = windows.indices.filter { index in
-                let finer = blocks[windows[index].indices[0]]
+            let targets = windows.indices.filter { windowIndex in
+                let finer = blocks[windows[windowIndex].indices[0]]
                 return finer.track != nil && finer.track != block.track
                     && finer.startSeconds >= block.startSeconds && finer.endSeconds <= block.endSeconds
             }
@@ -69,18 +72,29 @@ enum MarkdownRenderer {
                 nextPart += 1
             }
             let heading = parts.isEmpty ? "##" : "###"
-            output += "\(heading) \(clock(block.startSeconds))–\(clock(block.endSeconds))\n\n\(merged(window.blocks))\n\n"
+            output += "\(heading) \(clock(block.startSeconds))–\(clock(block.endSeconds))\n\n\(merged(window.blocks, online: online))\n\n"
         }
         return output
     }
 
-    /// Interleaves per-track turns by timestamp. The microphone label is fixed rather than trusted to the model.
+    /// Microphone voices are anonymous unless computer speech establishes an online session.
     static func merged(_ blocks: [TranscriptBlock]) -> String {
+        merged(blocks, online: isOnline(blocks))
+    }
+
+    private static func merged(_ blocks: [TranscriptBlock], online: Bool) -> String {
         let turns = blocks.flatMap { block in
             block.resolvedTurns.map { turn in
                 var turn = turn
-                turn.speaker = block.track == .microphone ? TranscriptTurn.recordingUser : simplifiedChinese(turn.speaker)
+                turn.speaker = simplifiedChinese(turn.speaker)
                 turn.text = simplifiedChinese(turn.text)
+                if block.track != nil, turn.text.trimmingCharacters(in: .whitespaces) == TranscriptTurn.silence {
+                    turn.speaker = "Speaker"
+                } else if block.track == .microphone, online {
+                    turn.speaker = TranscriptTurn.recordingUser
+                } else if block.track == .system, !online {
+                    turn.speaker = "Computer"
+                }
                 return turn
             }
         }
@@ -91,6 +105,19 @@ enum MarkdownRenderer {
         let kept = spoken.isEmpty ? Array(turns.prefix(1)) : spoken
         return kept.enumerated().sorted { ($0.element.startMilliseconds, $0.offset) < ($1.element.startMilliseconds, $1.offset) }
             .map(\.element.line).joined(separator: "\n\n")
+    }
+
+    private static func isOnline(_ blocks: [TranscriptBlock]) -> Bool {
+        var systemCharacters = 0
+        var speechCharacters = 0
+        for block in blocks {
+            for turn in block.resolvedTurns where turn.text.trimmingCharacters(in: .whitespaces) != TranscriptTurn.silence {
+                let count = simplifiedChinese(turn.text).count
+                speechCharacters += count
+                if block.track == .system { systemCharacters += count }
+            }
+        }
+        return systemCharacters >= 100 || (speechCharacters > 0 && Double(systemCharacters) / Double(speechCharacters) >= 0.05)
     }
 
     /// Models sometimes write Chinese speech in Traditional characters. Converting script is deterministic

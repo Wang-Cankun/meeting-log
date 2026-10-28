@@ -237,7 +237,7 @@ struct MeetingProcessor {
                 defer { try? FileManager.default.removeItem(at: upload) }
                 let range = (start: block.startSeconds, end: block.endSeconds)
                 try await Task.detached { try MediaProcessor.encodeFLAC(source: source, destination: upload, range: range) }.value
-                let result = try await speech.transcribe(audio: upload, diarize: block.track != .microphone, phrases: phrases)
+                let result = try await speech.transcribe(audio: upload, diarize: true, phrases: phrases)
                 let transcript = try SpeechTranscriber.transcript(result, start: block.startSeconds, end: block.endSeconds, track: block.track)
                 return (transcript.text, transcript.turns)
             } checkpoint: { updated in

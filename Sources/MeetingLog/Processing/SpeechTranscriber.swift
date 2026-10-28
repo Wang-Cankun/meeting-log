@@ -65,7 +65,7 @@ struct SpeechTranscriber: Sendable {
     }
 
     /// Converts diarized phrases into validated transcript turns for one section.
-    /// Speaker letters follow first appearance; the microphone track is always Me.
+    /// Speaker letters follow first appearance; microphone attribution belongs to the renderer.
     static func transcript(_ result: SpeechResult, start: Double, end: Double, track: TranscriptTrack?) throws
         -> (text: String, turns: [TranscriptTurn]) {
         let phrases = result.phrases
@@ -75,9 +75,7 @@ struct SpeechTranscriber: Sendable {
             .filter { !$0.text.isEmpty }
             .sorted { $0.offsetMilliseconds < $1.offsetMilliseconds }
         guard !phrases.isEmpty else {
-            let turn = TranscriptTurn(startMilliseconds: Int(start) * 1000,
-                                      speaker: track == .microphone ? TranscriptTurn.recordingUser : "Speaker",
-                                      text: TranscriptTurn.silence)
+            let turn = TranscriptTurn(startMilliseconds: Int(start) * 1000, speaker: "Speaker", text: TranscriptTurn.silence)
             return (turn.line, [turn])
         }
         // A response whose phrases all share one offset lost its timing; accepting it would stamp every turn at one time.
@@ -89,9 +87,7 @@ struct SpeechTranscriber: Sendable {
         var turns: [TranscriptTurn] = []
         for phrase in phrases {
             let label: String
-            if track == .microphone {
-                label = TranscriptTurn.recordingUser
-            } else if let known = letters[phrase.speaker] {
+            if let known = letters[phrase.speaker] {
                 label = known
             } else {
                 let index = letters.count

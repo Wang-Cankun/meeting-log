@@ -35,7 +35,7 @@ enum TranscriptPolisher {
     /// and speaker labels stay those of the raw transcript.
     static func tidy(_ raw: String) -> String {
         var elements: [String] = []
-        var run: [(time: String, speaker: String, text: String)] = []
+        var run: [TranscriptTurn] = []
         func flush() {
             var turns = mergingSpeakers(run)
             turns = turns.enumerated().filter { index, turn in
@@ -44,15 +44,14 @@ enum TranscriptPolisher {
                 let previous = turns[index - 1].text
                 return turns[index - 1].speaker != turns[index + 1].speaker || previous.hasSuffix("?") || previous.hasSuffix("？")
             }.map(\.element)
-            elements += mergingSpeakers(turns).map { "[\($0.time)] \($0.speaker): \($0.text)" }
+            elements += mergingSpeakers(turns).map(\.line)
             run = []
         }
         for line in raw.components(separatedBy: .newlines) {
-            let ns = line as NSString
-            if let match = turnPattern.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) {
-                let text = withoutFillers(ns.substring(with: match.range(at: 3)))
-                if !text.isEmpty {
-                    run.append((ns.substring(with: match.range(at: 1)), ns.substring(with: match.range(at: 2)), text))
+            if var turn = TranscriptTurn.parse(line).first {
+                turn.text = withoutFillers(turn.text)
+                if !turn.text.isEmpty {
+                    run.append(turn)
                 }
             } else if !line.trimmingCharacters(in: .whitespaces).isEmpty {
                 flush()
@@ -63,7 +62,6 @@ enum TranscriptPolisher {
         return elements.joined(separator: "\n\n") + "\n"
     }
 
-    private static let turnPattern = try! NSRegularExpression(pattern: #"^\[(\d{2,}:[0-5]\d)\] ([^:\n]+): (.+)$"#)
     private static let fillerPattern = try! NSRegularExpression(
         pattern: #"(?:,\s*)?(?<![\w-])(?:um+|uh+|erm+|ah+)(?![\w-])[.,…]*\s*|呃[，,、…]*|^嗯[，,、…]+"#, options: .caseInsensitive)
     private static let soundWords: Set<String> = ["mm", "mmm", "hmm", "mhm", "mm-hmm", "uh-huh", "oh"]
@@ -85,14 +83,13 @@ enum TranscriptPolisher {
             .filter { !$0.isEmpty }
         let sound = { (token: String) in soundWords.contains(token) || token.range(of: #"^嗯+$"#, options: .regularExpression) != nil }
         guard !tokens.isEmpty else { return false }
-        if speaker == "Me" { return tokens.allSatisfy(sound) }
+        if speaker == TranscriptTurn.recordingUser { return tokens.allSatisfy(sound) }
         return tokens.allSatisfy {
             sound($0) || assentWords.contains($0) || $0.range(of: #"^[嗯对好是]+$"#, options: .regularExpression) != nil
         }
     }
 
-    private static func mergingSpeakers(_ turns: [(time: String, speaker: String, text: String)])
-        -> [(time: String, speaker: String, text: String)] {
+    private static func mergingSpeakers(_ turns: [TranscriptTurn]) -> [TranscriptTurn] {
         turns.reduce(into: []) { merged, turn in
             if let last = merged.last, last.speaker == turn.speaker {
                 merged[merged.count - 1].text += " " + turn.text

@@ -73,7 +73,9 @@ struct SpeechTranscriber: Sendable {
             .filter { !$0.text.isEmpty }
             .sorted { $0.offsetMilliseconds < $1.offsetMilliseconds }
         guard !phrases.isEmpty else {
-            return "[\(clock(Int(start)))] \(track == .microphone ? "Me" : "Speaker"): [no audible speech]"
+            return TranscriptTurn(startMilliseconds: Int(start) * 1000,
+                                  speaker: track == .microphone ? TranscriptTurn.recordingUser : "Speaker",
+                                  text: TranscriptTurn.silence).line
         }
         // A response whose phrases all share one offset lost its timing; accepting it would stamp every turn at one time.
         if phrases.count > 1, Set(phrases.map(\.offsetMilliseconds)).count == 1 { throw SpeechError.missingTiming }
@@ -81,11 +83,11 @@ struct SpeechTranscriber: Sendable {
 
         let latest = Int(end.rounded(.up)) - 1
         var letters: [Int?: String] = [:]
-        var turns: [(time: Int, label: String, text: String)] = []
+        var turns: [TranscriptTurn] = []
         for phrase in phrases {
             let label: String
             if track == .microphone {
-                label = "Me"
+                label = TranscriptTurn.recordingUser
             } else if let known = letters[phrase.speaker] {
                 label = known
             } else {
@@ -96,13 +98,13 @@ struct SpeechTranscriber: Sendable {
             let time = max(Int(start), min(Int(start + Double(phrase.offsetMilliseconds) / 1000), latest))
             // A capture track holds only part of the conversation: joining its phrases here would carry every reply
             // recorded on the other track past them.
-            if track == nil, let last = turns.last, last.label == label {
+            if track == nil, let last = turns.last, last.speaker == label {
                 turns[turns.count - 1].text += " " + phrase.text
             } else {
-                turns.append((time, label, phrase.text))
+                turns.append(TranscriptTurn(startMilliseconds: time * 1000, speaker: label, text: phrase.text))
             }
         }
-        let text = turns.map { "[\(clock($0.time))] \($0.label): \($0.text)" }.joined(separator: "\n")
+        let text = turns.map(\.line).joined(separator: "\n")
         return try TranscriptResponse.validate(text, start: start, end: end)
     }
 
@@ -132,10 +134,6 @@ struct SpeechTranscriber: Sendable {
             .map { $0.trimmingCharacters(in: .whitespaces.union(.punctuationCharacters)) }
             .filter { (2...40).contains($0.count) && seen.insert($0.lowercased()).inserted }
             .prefix(100).map { $0 }
-    }
-
-    private static func clock(_ seconds: Int) -> String {
-        String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 }
 

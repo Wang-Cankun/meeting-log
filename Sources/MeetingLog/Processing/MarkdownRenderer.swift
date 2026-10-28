@@ -7,7 +7,7 @@ enum MarkdownRenderer {
             output += "These are separate recordings grouped by the user. File order is playback order, not evidence of continuous conversation. Gaps and real-world chronology are unknown; do not invent missing discussion. Times below refer to the combined audio.\n\n"
         }
         if blocks.contains(where: { $0.track != nil }) {
-            output += "Turns labeled Me come from the recording user's microphone. Other speakers come from computer audio; their letters are anonymous within each section.\n\n"
+            output += "Turns labeled \(TranscriptTurn.recordingUser) come from the recording user's microphone. Other speakers come from computer audio; their letters are anonymous within each section.\n\n"
         }
         var offset = 0.0
         var boundaries: [(Double, String)] = []
@@ -52,16 +52,13 @@ enum MarkdownRenderer {
         for block in blocks {
             var time = Int(block.startSeconds)
             for line in simplifiedChinese(block.text).components(separatedBy: .newlines) where !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                let ns = line as NSString
-                guard let match = turnPattern.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else {
+                guard var turn = TranscriptTurn.parse(line).first else {
                     turns.append((time, line, false))
                     continue
                 }
-                time = (Int(ns.substring(with: match.range(at: 1))) ?? 0) * 60 + (Int(ns.substring(with: match.range(at: 2))) ?? 0)
-                let speaker = block.track == .microphone ? "Me" : ns.substring(with: match.range(at: 3))
-                let text = ns.substring(with: match.range(at: 4))
-                turns.append((time, "[\(ns.substring(with: match.range(at: 1))):\(ns.substring(with: match.range(at: 2)))] \(speaker): \(text)",
-                              text.trimmingCharacters(in: .whitespaces) == "[no audible speech]"))
+                time = turn.startMilliseconds / 1000
+                if block.track == .microphone { turn.speaker = TranscriptTurn.recordingUser }
+                turns.append((time, turn.line, turn.text.trimmingCharacters(in: .whitespaces) == TranscriptTurn.silence))
             }
         }
         let spoken = turns.filter { !$0.silent }
@@ -75,8 +72,6 @@ enum MarkdownRenderer {
     static func simplifiedChinese(_ text: String) -> String {
         text.applyingTransform(StringTransform("Hant-Hans"), reverse: false) ?? text
     }
-
-    private static let turnPattern = try! NSRegularExpression(pattern: #"^\[(\d{2,}):([0-5]\d)\] ([^:\n]+): (.+)$"#)
 
     static func summary(_ value: MeetingAnalysis, startedAt: Date, evidenceSource: SummaryEvidence.Source = .legacy) -> String {
         var output = """

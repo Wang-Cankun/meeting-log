@@ -38,7 +38,10 @@ struct TranscriptBlock: Codable, Identifiable, Sendable {
     var track: TranscriptTrack? = nil
     var status: Status = .pending
     var text: String = ""
+    var turns: [TranscriptTurn]? = nil
     var error: String?
+
+    var resolvedTurns: [TranscriptTurn] { turns ?? TranscriptTurn.parse(text) }
 }
 
 struct ActionItem: Codable, Equatable {

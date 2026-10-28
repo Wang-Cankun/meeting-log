@@ -45,25 +45,20 @@ enum MarkdownRenderer {
 
     /// Interleaves per-track turns by timestamp. The microphone label is fixed rather than trusted to the model.
     static func merged(_ blocks: [TranscriptBlock]) -> String {
-        guard blocks.contains(where: { $0.track != nil }) else {
-            return blocks.map { simplifiedChinese($0.text).trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n\n")
-        }
-        var turns: [(time: Int, line: String, silent: Bool)] = []
-        for block in blocks {
-            var time = Int(block.startSeconds)
-            for line in simplifiedChinese(block.text).components(separatedBy: .newlines) where !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                guard var turn = TranscriptTurn.parse(line).first else {
-                    turns.append((time, line, false))
-                    continue
-                }
-                time = turn.startMilliseconds / 1000
-                if block.track == .microphone { turn.speaker = TranscriptTurn.recordingUser }
-                turns.append((time, turn.line, turn.text.trimmingCharacters(in: .whitespaces) == TranscriptTurn.silence))
+        let turns = blocks.flatMap { block in
+            block.resolvedTurns.map { turn in
+                var turn = turn
+                turn.speaker = block.track == .microphone ? TranscriptTurn.recordingUser : simplifiedChinese(turn.speaker)
+                turn.text = simplifiedChinese(turn.text)
+                return turn
             }
         }
-        let spoken = turns.filter { !$0.silent }
+        guard blocks.contains(where: { $0.track != nil }) else {
+            return turns.map(\.line).joined(separator: "\n\n")
+        }
+        let spoken = turns.filter { $0.text.trimmingCharacters(in: .whitespaces) != TranscriptTurn.silence }
         let kept = spoken.isEmpty ? Array(turns.prefix(1)) : spoken
-        return kept.enumerated().sorted { ($0.element.time, $0.offset) < ($1.element.time, $1.offset) }
+        return kept.enumerated().sorted { ($0.element.startMilliseconds, $0.offset) < ($1.element.startMilliseconds, $1.offset) }
             .map(\.element.line).joined(separator: "\n\n")
     }
 

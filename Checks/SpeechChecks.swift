@@ -12,13 +12,13 @@ func checkSpeechTranscription() async throws {
                 {"speaker":3,"offsetMilliseconds":9000,"text":"Agenda\\nfirst."},
                 {"speaker":1,"offsetMilliseconds":19900,"text":"Late."}]}
     """.utf8))
-    let text = try SpeechTranscriber.transcript(decoded, start: 0, end: 20, track: nil)
+    let text = try SpeechTranscriber.transcript(decoded, start: 0, end: 20, track: nil).text
     precondition(text == "[00:01] Speaker A: Hello team.\n\n[00:04] Speaker B: Hi.\n\n[00:07] Speaker A: Let's start. Agenda first.\n\n[00:19] Speaker B: Late.", text)
-    let offset = try SpeechTranscriber.transcript(decoded, start: 600, end: 620, track: .microphone)
+    let offset = try SpeechTranscriber.transcript(decoded, start: 600, end: 620, track: .microphone).text
     precondition(offset == "[10:01] Me: Hello team.\n\n[10:04] Me: Hi.\n\n[10:07] Me: Let's start.\n\n[10:09] Me: Agenda first.\n\n[10:19] Me: Late.",
                  "Microphone turns are always Me and keep their own times: \(offset)")
     let silent = try JSONDecoder().decode(SpeechResult.self, from: Data("{}".utf8))
-    let silence = try SpeechTranscriber.transcript(silent, start: 0, end: 5, track: nil)
+    let silence = try SpeechTranscriber.transcript(silent, start: 0, end: 5, track: nil).text
     precondition(silence == "[00:00] Speaker: [no audible speech]")
     let untimed = try JSONDecoder().decode(SpeechResult.self, from: Data("""
     {"phrases":[{"speaker":0,"offsetMilliseconds":0,"text":"One."},{"speaker":1,"offsetMilliseconds":0,"text":"Two."}]}
@@ -27,6 +27,15 @@ func checkSpeechTranscription() async throws {
         _ = try SpeechTranscriber.transcript(untimed, start: 0, end: 600, track: nil)
         preconditionFailure("Phrases without timing accepted")
     } catch SpeechError.missingTiming {}
+
+    let overrun = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":20400,"durationMilliseconds":600,"text":"Late.\\nStill here."}]}
+    """.utf8))
+    let clamped = try SpeechTranscriber.transcript(overrun, start: 0, end: 20, track: .system)
+    let validated = try TranscriptResponse.validate(clamped.text, start: 0, end: 20)
+    precondition(validated == "[00:19] Speaker A: Late. Still here.", validated)
+    precondition(clamped.turns[0].startMilliseconds == 19_999 && clamped.turns[0].durationMilliseconds == 600,
+                 "Clamping preserves the final second and phrase duration")
 
     let tidy = TranscriptPolisher.tidy("""
     # Transcript
@@ -121,6 +130,38 @@ func checkSpeechTranscription() async throws {
     precondition(state.speechRequests == 3, "One failed whole-file request plus two windows: \(state)")
     let longRaw = try String(contentsOf: longArchive.appending(path: "transcript_raw.md"), encoding: .utf8)
     precondition(longRaw.contains("## 00:00–10:00") && longRaw.contains("## 09:50–16:00"), longRaw)
+
+    // A completed sibling must retain its turns when the failed track is split and reindexed.
+    let (fallback, fallbackManifest) = try store.createPendingSession(videoEnabled: false, microphoneID: "fixture")
+    try writeSpeechTone(to: fallback.appending(path: "system-audio.caf"), seconds: 960)
+    try FileManager.default.copyItem(at: longArchive.appending(path: "audio.m4a"), to: fallback.appending(path: "microphone.m4a"))
+    _ = try await CapturePreparation.prepare(in: fallback)
+    SpeechFixture.reset(failFirstSpeech: true)
+    let checkpoints = Mutex<[Data]>([])
+    _ = try await MeetingProcessor(store: store, client: nil, speech: speech, progress: { progress in
+        if case let .transcribe(_, total) = progress.stage, total == 3,
+           let data = try? Data(contentsOf: fallback.appending(path: "coverage.json")) {
+            checkpoints.withLock { $0.append(data) }
+        }
+    }).process(directory: fallback, manifest: fallbackManifest, projectName: project.name)
+    state = SpeechFixture.snapshot()
+    precondition(state.speechRequests == 4, "Two whole-track requests, one fails, then two windows: \(state)")
+    guard let splitData = checkpoints.withLock({ $0.first }) else { preconditionFailure("Missing split checkpoint") }
+    let split = try JSONDecoder().decode([TranscriptBlock].self, from: splitData)
+    guard let completed = split.first(where: { $0.status == .complete }) else { preconditionFailure("Lost completed sibling") }
+    precondition(split.count == 3 && completed.endSeconds > 900)
+    precondition(completed.resolvedTurns[0].startMilliseconds == 1200 && completed.resolvedTurns[0].durationMilliseconds == 700,
+                 "Completed speech turns must survive checkpoint writes and fallback reindexing")
+
+    let legacyURL = root.appending(path: "coverage.json")
+    try Data("""
+    [{"id":0,"startSeconds":0,"endSeconds":20,"status":"complete","text":"[00:12] Speaker A: Cached."}]
+    """.utf8).write(to: legacyURL)
+    let legacy = try JSONDecoder().decode([TranscriptBlock].self, from: Data(contentsOf: legacyURL))
+    precondition(legacy[0].turns == nil && legacy[0].status == .complete)
+    precondition(legacy[0].resolvedTurns[0].startMilliseconds == 12_000 && legacy[0].resolvedTurns[0].text == "Cached.",
+                 "Coverage without structured turns must decode and resolve its text")
+    print("Speech turn metadata passed: millisecond clamp, durations, fallback checkpoints, legacy coverage")
     print("Speech transcription passed: diarized letters, Me track, timing guard, context phrases, whole-file request, window fallback, temperature retry")
 }
 
@@ -227,7 +268,7 @@ private final class SpeechFixture: URLProtocol, @unchecked Sendable {
                 return state.failFirstSpeech && state.speechRequests == 1
             }
             if fail { return respond(400, #"{"error":"diarization_unavailable"}"#) }
-            return respond(200, #"{"phrases":[{"speaker":0,"offsetMilliseconds":1000,"text":"Opening."},{"speaker":2,"offsetMilliseconds":5000,"text":"Reply."}]}"#)
+            return respond(200, #"{"phrases":[{"speaker":0,"offsetMilliseconds":1200,"durationMilliseconds":700,"text":"Opening."},{"speaker":2,"offsetMilliseconds":5000,"text":"Reply."}]}"#)
         }
         Self.state.withLock { $0.chatRequests += 1 }
         let body = try! JSONSerialization.jsonObject(with: data) as! [String: Any]

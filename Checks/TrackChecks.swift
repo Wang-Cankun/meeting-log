@@ -12,6 +12,27 @@ func checkSeparateTrackTranscription() async throws {
                         text: "[00:05] Speaker A: Yes, clearly."),
     ])
     precondition(merged == "[00:02] Speaker A: Can you hear me?\n\n[00:05] Me: Yes, clearly.\n\n[00:09] Speaker B: Next item.")
+    for (microphoneTime, systemTime, expected) in [
+        (12_400, 12_700, "[00:12] Me: Local reply.\n\n[00:12] Speaker A: 远端发言。"),
+        (12_700, 12_400, "[00:12] Speaker A: 远端发言。\n\n[00:12] Me: Local reply."),
+    ] {
+        let remote = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+        {"phrases":[{"speaker":0,"offsetMilliseconds":\(systemTime),"text":"遠端發言。"}]}
+        """.utf8))
+        let local = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+        {"phrases":[{"speaker":0,"offsetMilliseconds":\(microphoneTime),"text":"Local reply."}]}
+        """.utf8))
+        let remoteTranscript = try SpeechTranscriber.transcript(remote, start: 0, end: 20, track: .system)
+        let localTranscript = try SpeechTranscriber.transcript(local, start: 0, end: 20, track: .microphone)
+        let ordered = MarkdownRenderer.merged([
+            TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                            text: remoteTranscript.text, turns: remoteTranscript.turns),
+            TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                            text: localTranscript.text, turns: localTranscript.turns),
+        ])
+        precondition(ordered == expected, "Millisecond order must survive speech conversion and script normalization: \(ordered)")
+    }
+    print("Transcript millisecond order passed: microphone first and computer first")
     let silent = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete, text: "[00:00] Speaker: [no audible speech]"),
         TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete, text: "[00:03] Me: Hello?"),
@@ -28,9 +49,9 @@ func checkSeparateTrackTranscription() async throws {
     """.utf8))
     let answered = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete,
-                        text: try SpeechTranscriber.transcript(remote, start: 0, end: 600, track: .system)),
+                        text: try SpeechTranscriber.transcript(remote, start: 0, end: 600, track: .system).text),
         TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete,
-                        text: try SpeechTranscriber.transcript(local, start: 0, end: 600, track: .microphone)),
+                        text: try SpeechTranscriber.transcript(local, start: 0, end: 600, track: .microphone).text),
     ])
     precondition(answered == """
     [00:01] Me: Here is step two.
@@ -53,7 +74,7 @@ func checkSeparateTrackTranscription() async throws {
     let presented = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete, text: "[00:00] Speaker: [no audible speech]"),
         TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete,
-                        text: try SpeechTranscriber.transcript(monologue, start: 0, end: 600, track: .microphone)),
+                        text: try SpeechTranscriber.transcript(monologue, start: 0, end: 600, track: .microphone).text),
     ])
     precondition(presented == "[00:01] Me: First slide.\n\n[04:00] Me: Fifth slide.\n\n[09:00] Me: Questions?",
                  "A monologue keeps each phrase's time in the raw transcript: \(presented)")

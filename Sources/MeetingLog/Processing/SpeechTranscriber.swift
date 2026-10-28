@@ -66,16 +66,19 @@ struct SpeechTranscriber: Sendable {
 
     /// Converts diarized phrases into validated transcript turns for one section.
     /// Speaker letters follow first appearance; the microphone track is always Me.
-    static func transcript(_ result: SpeechResult, start: Double, end: Double, track: TranscriptTrack?) throws -> String {
+    static func transcript(_ result: SpeechResult, start: Double, end: Double, track: TranscriptTrack?) throws
+        -> (text: String, turns: [TranscriptTurn]) {
         let phrases = result.phrases
             .map { SpeechResult.Phrase(speaker: $0.speaker, offsetMilliseconds: $0.offsetMilliseconds,
+                                       durationMilliseconds: $0.durationMilliseconds,
                                        text: $0.text.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)) }
             .filter { !$0.text.isEmpty }
             .sorted { $0.offsetMilliseconds < $1.offsetMilliseconds }
         guard !phrases.isEmpty else {
-            return TranscriptTurn(startMilliseconds: Int(start) * 1000,
-                                  speaker: track == .microphone ? TranscriptTurn.recordingUser : "Speaker",
-                                  text: TranscriptTurn.silence).line
+            let turn = TranscriptTurn(startMilliseconds: Int(start) * 1000,
+                                      speaker: track == .microphone ? TranscriptTurn.recordingUser : "Speaker",
+                                      text: TranscriptTurn.silence)
+            return (turn.line, [turn])
         }
         // A response whose phrases all share one offset lost its timing; accepting it would stamp every turn at one time.
         if phrases.count > 1, Set(phrases.map(\.offsetMilliseconds)).count == 1 { throw SpeechError.missingTiming }
@@ -95,17 +98,18 @@ struct SpeechTranscriber: Sendable {
                 label = index < 26 ? "Speaker \(Character(UnicodeScalar(65 + index)!))" : "Speaker \(index + 1)"
                 letters[phrase.speaker] = label
             }
-            let time = max(Int(start), min(Int(start + Double(phrase.offsetMilliseconds) / 1000), latest))
+            let time = max(Int(start) * 1000, min(Int(start * 1000) + phrase.offsetMilliseconds, latest * 1000 + 999))
             // A capture track holds only part of the conversation: joining its phrases here would carry every reply
             // recorded on the other track past them.
             if track == nil, let last = turns.last, last.speaker == label {
                 turns[turns.count - 1].text += " " + phrase.text
             } else {
-                turns.append(TranscriptTurn(startMilliseconds: time * 1000, speaker: label, text: phrase.text))
+                turns.append(TranscriptTurn(startMilliseconds: time, durationMilliseconds: phrase.durationMilliseconds,
+                                            speaker: label, text: phrase.text))
             }
         }
         let text = turns.map(\.line).joined(separator: "\n")
-        return try TranscriptResponse.validate(text, start: start, end: end)
+        return (try TranscriptResponse.validate(text, start: start, end: end), turns)
     }
 
     /// Names from context tables and terminology bullets bias recognition; they are hints, not forced output.
@@ -141,6 +145,7 @@ struct SpeechResult: Decodable, Sendable {
     struct Phrase: Decodable, Sendable {
         let speaker: Int?
         let offsetMilliseconds: Int
+        let durationMilliseconds: Int?
         let text: String
     }
     let phrases: [Phrase]

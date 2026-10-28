@@ -67,7 +67,7 @@ struct MeetingProcessor {
                         let feedback = attempt == 0 ? "" : "\nYour previous response failed format/timestamp validation. Re-transcribe the audio using the exact output contract; the last timestamp must be strictly before the excerpt end."
                         let response = try await client.transcribe(audio: chunk.url, prompt: prompt + feedback)
                         do {
-                            return try TranscriptResponse.validate(response, start: chunk.startSeconds, end: chunk.endSeconds)
+                            return (try TranscriptResponse.validate(response, start: chunk.startSeconds, end: chunk.endSeconds), nil)
                         } catch {
                             if attempt == 1 { throw error }
                         }
@@ -238,7 +238,8 @@ struct MeetingProcessor {
                 let range = (start: block.startSeconds, end: block.endSeconds)
                 try await Task.detached { try MediaProcessor.encodeFLAC(source: source, destination: upload, range: range) }.value
                 let result = try await speech.transcribe(audio: upload, diarize: block.track != .microphone, phrases: phrases)
-                return try SpeechTranscriber.transcript(result, start: block.startSeconds, end: block.endSeconds, track: block.track)
+                let transcript = try SpeechTranscriber.transcript(result, start: block.startSeconds, end: block.endSeconds, track: block.track)
+                return (transcript.text, transcript.turns)
             } checkpoint: { updated in
                 try saveBlocks(updated, in: directory)
             } progress: { completed, total in
@@ -272,6 +273,7 @@ struct MeetingProcessor {
                                                 endSeconds: entry.element.endSeconds, track: entry.element.track)
                     block.status = entry.element.status
                     block.text = entry.element.text
+                    block.turns = entry.element.turns
                     return block
                 }
             try saveBlocks(split, in: directory)

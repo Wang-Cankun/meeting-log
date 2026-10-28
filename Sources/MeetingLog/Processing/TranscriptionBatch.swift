@@ -8,7 +8,7 @@ enum TranscriptionBatch {
     static func run(
         blocks original: [TranscriptBlock],
         limit: Int = concurrencyLimit,
-        transcribe: @escaping @Sendable (Int) async throws -> String,
+        transcribe: @escaping @Sendable (Int) async throws -> (text: String, turns: [TranscriptTurn]?),
         checkpoint: ([TranscriptBlock]) throws -> Void,
         progress: (Int, Int) -> Void
     ) async throws -> [TranscriptBlock] {
@@ -25,9 +25,10 @@ enum TranscriptionBatch {
                 group.addTask {
                     do {
                         try Task.checkCancellation()
-                        let text = try await transcribe(index).trimmingCharacters(in: .whitespacesAndNewlines)
+                        let transcript = try await transcribe(index)
+                        let text = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !text.isEmpty else { throw ProviderError.invalidResponse }
-                        return BlockResult(index: index, result: .success(text))
+                        return BlockResult(index: index, result: .success((text, transcript.turns)))
                     } catch {
                         return BlockResult(index: index, result: .failure(error))
                     }
@@ -39,8 +40,9 @@ enum TranscriptionBatch {
             }
             while let value = try await group.next() {
                 switch value.result {
-                case let .success(text):
-                    blocks[value.index].text = text
+                case let .success(transcript):
+                    blocks[value.index].text = transcript.text
+                    blocks[value.index].turns = transcript.turns
                     blocks[value.index].status = .complete
                     blocks[value.index].error = nil
                     complete += 1
@@ -67,6 +69,6 @@ enum TranscriptionBatch {
 
     private struct BlockResult: Sendable {
         let index: Int
-        let result: Result<String, Error>
+        let result: Result<(text: String, turns: [TranscriptTurn]?), Error>
     }
 }

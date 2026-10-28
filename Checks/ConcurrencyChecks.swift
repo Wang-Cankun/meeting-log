@@ -69,7 +69,7 @@ private actor BatchProbe {
     var started: [Int] = []
     var finished: [Int] = []
     init(failFirst: Bool = false, slow: Bool = false) { self.failFirst = failFirst; self.slow = slow }
-    func transcribe(_ index: Int) async throws -> String {
+    func transcribe(_ index: Int) async throws -> (text: String, turns: [TranscriptTurn]?) {
         active += 1
         peak = max(peak, active)
         started.append(index)
@@ -78,7 +78,7 @@ private actor BatchProbe {
         try await Task.sleep(for: .milliseconds(milliseconds))
         if failFirst && index == 0 { throw ProviderError.authentication }
         finished.append(index)
-        return "Block \(index)"
+        return ("Block \(index)", nil)
     }
     func stats() -> (peak: Int, active: Int, started: [Int], finished: [Int]) { (peak, active, started, finished) }
 }

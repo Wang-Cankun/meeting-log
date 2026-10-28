@@ -9,6 +9,7 @@ swiftc \
   "$repo_dir/Sources/MeetingLog/Capture/LevelUpdateGate.swift" \
   "$repo_dir/Sources/MeetingLog/Capture/MicrophoneSilenceMonitor.swift" \
   "$repo_dir/Sources/MeetingLog/Storage/ArchiveStore.swift" \
+  "$repo_dir/Sources/MeetingLog/Processing/TranscriptTurn.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/MarkdownRenderer.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/MediaProcessor.swift" \
   "$repo_dir/Sources/MeetingLog/Processing/CapturePreparation.swift" \

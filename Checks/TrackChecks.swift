@@ -2,9 +2,13 @@ import Synchronization
 import AVFoundation
 import Foundation
 
-/// A complete capture transcribes microphone and computer audio separately and labels the microphone Me.
+/// A complete capture keeps per-track speech and resolves the recording user's label at rendering.
 @MainActor
 func checkSeparateTrackTranscription() async throws {
+    checkTranscriptEcho()
+    try checkPauseSplit()
+    try checkMicrophoneAttribution()
+    checkTranscriptSections()
     let merged = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete,
                         text: "[00:02] Speaker A: Can you hear me?\n\n[00:09] Speaker B: Next item."),
@@ -12,11 +16,103 @@ func checkSeparateTrackTranscription() async throws {
                         text: "[00:05] Speaker A: Yes, clearly."),
     ])
     precondition(merged == "[00:02] Speaker A: Can you hear me?\n\n[00:05] Me: Yes, clearly.\n\n[00:09] Speaker B: Next item.")
+    for (microphoneTime, systemTime, expected) in [
+        (12_400, 12_700, "[00:12] Me: Local reply.\n\n[00:12] Speaker A: 远端发言。"),
+        (12_700, 12_400, "[00:12] Speaker A: 远端发言。\n\n[00:12] Me: Local reply."),
+    ] {
+        let remote = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+        {"phrases":[{"speaker":0,"offsetMilliseconds":\(systemTime),"text":"遠端發言。"}]}
+        """.utf8))
+        let local = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+        {"phrases":[{"speaker":0,"offsetMilliseconds":\(microphoneTime),"text":"Local reply."}]}
+        """.utf8))
+        let remoteTranscript = try SpeechTranscriber.transcript(remote, start: 0, end: 20, track: .system)
+        let localTranscript = try SpeechTranscriber.transcript(local, start: 0, end: 20, track: .microphone)
+        let ordered = MarkdownRenderer.merged([
+            TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                            text: remoteTranscript.text, turns: remoteTranscript.turns),
+            TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                            text: localTranscript.text, turns: localTranscript.turns),
+        ])
+        precondition(ordered == expected, "Millisecond order must survive speech conversion and script normalization: \(ordered)")
+    }
+    print("Transcript millisecond order passed: microphone first and computer first")
     let silent = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete, text: "[00:00] Speaker: [no audible speech]"),
         TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete, text: "[00:03] Me: Hello?"),
     ])
     precondition(silent == "[00:03] Me: Hello?", "Silence placeholders must not interleave with speech")
+    let remote = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":2000,"text":"Is the rough placement good enough?"},
+                {"speaker":0,"offsetMilliseconds":20000,"text":"Okay, nice."}]}
+    """.utf8))
+    let local = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1000,"text":"Here is step two."},
+                {"speaker":0,"offsetMilliseconds":10000,"text":"Mostly, yes."},
+                {"speaker":0,"offsetMilliseconds":12000,"text":"Twocan fixes the rest."}]}
+    """.utf8))
+    let answered = MarkdownRenderer.merged([
+        TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete,
+                        text: try SpeechTranscriber.transcript(remote, start: 0, end: 600, track: .system).text),
+        TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete,
+                        text: try SpeechTranscriber.transcript(local, start: 0, end: 600, track: .microphone).text),
+    ])
+    precondition(answered == """
+    [00:01] Me: Here is step two.
+
+    [00:02] Speaker A: Is the rough placement good enough?
+
+    [00:10] Me: Mostly, yes.
+
+    [00:12] Me: Twocan fixes the rest.
+
+    [00:20] Speaker A: Okay, nice.
+    """, "An answer must stay between the question and the reply that follow it on the other track: \(answered)")
+    let readable = TranscriptPolisher.tidy("## 00:00–10:00\n\n" + answered)
+    precondition(readable.contains("[00:10] Me: Mostly, yes. Twocan fixes the rest."), "The readable transcript joins a speaker's adjacent turns: \(readable)")
+    let monologue = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1000,"text":"First slide."},
+                {"speaker":0,"offsetMilliseconds":240000,"text":"Fifth slide."},
+                {"speaker":0,"offsetMilliseconds":540000,"text":"Questions?"}]}
+    """.utf8))
+    let presented = MarkdownRenderer.merged([
+        TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, track: .system, status: .complete, text: "[00:00] Speaker: [no audible speech]"),
+        TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 600, track: .microphone, status: .complete,
+                        text: try SpeechTranscriber.transcript(monologue, start: 0, end: 600, track: .microphone).text),
+    ])
+    precondition(presented == "[00:01] Speaker A: First slide.\n\n[04:00] Speaker A: Fifth slide.\n\n[09:00] Speaker A: Questions?",
+                 "A microphone-only monologue keeps its anonymous speaker and each phrase's time: \(presented)")
+    let accepted = TranscriptPolisher.tidy("""
+    ## 00:00–01:00
+
+    [00:01] Speaker A: Please send the table by Friday.
+
+    [00:03] Me: Okay.
+
+    [00:04] Speaker A: Then let's move on.
+    """)
+    precondition(accepted.contains("[00:03] Me: Okay."), "The recording user's short reply is not a backchannel: \(accepted)")
+    let listened = TranscriptPolisher.tidy("""
+    ## 00:00–01:00
+
+    [00:01] Speaker A: The first batch failed.
+
+    [00:05] Me: Mm-hmm.
+
+    [00:06] Speaker A: So we reran it overnight.
+
+    [00:09] Me: Mm, okay.
+
+    [00:10] Speaker A: Please check the logs.
+
+    [00:12] Me: 好的。
+
+    [00:13] Speaker A: Thanks.
+    """)
+    precondition(listened.contains("[00:01] Speaker A: The first batch failed. So we reran it overnight.") && !listened.contains("Mm-hmm"),
+                 "The recording user's wordless sound between one speaker's turns is a backchannel: \(listened)")
+    precondition(listened.contains("[00:09] Me: Mm, okay.") && listened.contains("[00:12] Me: 好的。"),
+                 "A Me turn with any assent word stays: \(listened)")
     let script = MarkdownRenderer.merged([
         TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 600, status: .complete, text: "[00:01] Speaker A: 這個 GPU server 還要修。"),
     ])
@@ -47,7 +143,219 @@ func checkSeparateTrackTranscription() async throws {
     precondition(raw.components(separatedBy: "## ").count == 2, "Both tracks must share one section per window")
     precondition(FileManager.default.fileExists(atPath: archived.appending(path: "audio.m4a").path))
     precondition(!FileManager.default.fileExists(atPath: archived.appending(path: "microphone.m4a").path))
-    print("Separate tracks passed: per-track upload, fixed Me label, timestamp merge, silence handling")
+    precondition(!FileManager.default.fileExists(atPath: archived.appending(path: "system-audio.caf").path))
+
+    let (kept, keptManifest) = try store.createPendingSession(videoEnabled: false, microphoneID: "fixture")
+    try writeTone(to: kept.appending(path: "system-audio.caf"), seconds: 20, fileType: .caf)
+    try writeTone(to: kept.appending(path: "microphone.m4a"), seconds: 15, fileType: .m4a)
+    let keptPreparation = try await CapturePreparation.prepare(in: kept)
+    precondition(keptPreparation.mode == .complete)
+    let keptArchive = try await MeetingProcessor(store: store, client: provider, keepsOriginalAudio: true)
+        .process(directory: kept, manifest: keptManifest, projectName: project.name)
+    precondition(keptArchive != archived)
+    for name in ["system-audio.caf", "microphone.m4a", "audio.m4a", "transcript_raw.md"] {
+        precondition(FileManager.default.fileExists(atPath: keptArchive.appending(path: name).path), "Missing kept \(name)")
+    }
+    for name in ["capture.mov", "chunks", "coverage.json", "session.json"] {
+        precondition(!FileManager.default.fileExists(atPath: keptArchive.appending(path: name).path), "Unexpected \(name)")
+    }
+    print("Separate tracks passed: per-track upload, online Me label, timestamp merge, answer order, anonymous monologue times, Me replies and sounds, silence handling, optional original tracks")
+}
+
+private func checkTranscriptEcho() {
+    func capture(system: [TranscriptTurn], microphone: [TranscriptTurn]) -> [TranscriptBlock] {
+        [TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                         text: system.map(\.line).joined(separator: "\n"), turns: system),
+         TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                         text: microphone.map(\.line).joined(separator: "\n"), turns: microphone)]
+    }
+    let system = TranscriptTurn(startMilliseconds: 1000, durationMilliseconds: 3000,
+                                speaker: "Speaker A", text: "Please send the revised table by Friday.")
+    let echo = TranscriptTurn(startMilliseconds: 3800, durationMilliseconds: 1200,
+                              speaker: "Speaker A", text: "BY, friday!")
+    let dropped = MarkdownRenderer.merged(capture(system: [system], microphone: [echo]))
+    precondition(dropped == "[00:01] Speaker A: Please send the revised table by Friday.",
+                 "A microphone echo with eight normalized characters and enough extended overlap must be removed: \(dropped)")
+
+    let reply = TranscriptTurn(startMilliseconds: 4100, durationMilliseconds: 300,
+                               speaker: "Speaker A", text: "by Friday.")
+    let answered = MarkdownRenderer.merged(capture(system: [system], microphone: [reply]))
+    precondition(answered == "[00:01] Speaker A: Please send the revised table by Friday.\n\n[00:04] Me: by Friday.",
+                 "A reply after the actual sentence end must stay, even within the 500 ms extension: \(answered)")
+
+    let unrelated = TranscriptTurn(startMilliseconds: 2000, durationMilliseconds: 1000,
+                                   speaker: "Speaker A", text: "I will check the sample labels.")
+    let simultaneous = MarkdownRenderer.merged(capture(system: [system], microphone: [unrelated]))
+    precondition(simultaneous == "[00:01] Speaker A: Please send the revised table by Friday.\n\n[00:02] Me: I will check the sample labels.",
+                 "Unrelated microphone speech must stay while computer speech plays: \(simultaneous)")
+
+    let cached = capture(system: [system], microphone: [echo]).map { block in
+        var block = block
+        block.turns = nil
+        return block
+    }
+    let untimed = MarkdownRenderer.merged(cached)
+    precondition(untimed == "[00:01] Speaker A: Please send the revised table by Friday.\n\n[00:03] Me: BY, friday!",
+                 "Text-only cached or chat turns have no durations and must stay: \(untimed)")
+    let roomText = String(repeating: "Room discussion. ", count: 100).trimmingCharacters(in: .whitespaces)
+    let room = TranscriptTurn(startMilliseconds: 10_000, durationMilliseconds: 5000,
+                              speaker: "Speaker B", text: roomText)
+    let inPerson = MarkdownRenderer.merged(capture(system: [system], microphone: [echo, room]))
+    precondition(inPerson == "[00:01] Computer: Please send the revised table by Friday.\n\n[00:03] Speaker A: BY, friday!\n\n[00:10] Speaker B: \(roomText)",
+                 "A microphone-only session must keep matching speech even with incidental computer audio: \(inPerson)")
+    print("Transcript echo passed: overlapping copy removed, reply after sentence kept, unrelated speech kept, no-duration and microphone-only speech kept")
+}
+
+/// Azure returns one speaker's sentences as one phrase even across a long pause; the reply in that pause must sit between them.
+private func checkPauseSplit() throws {
+    let remote = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1000,"durationMilliseconds":3700,"text":"Can you send it by Friday? Great, thanks.",
+      "words":[{"text":"Can","offsetMilliseconds":1000,"durationMilliseconds":150},{"text":"you","offsetMilliseconds":1200,"durationMilliseconds":100},
+               {"text":"send","offsetMilliseconds":1350,"durationMilliseconds":200},{"text":"it","offsetMilliseconds":1600,"durationMilliseconds":100},
+               {"text":"by","offsetMilliseconds":1750,"durationMilliseconds":100},{"text":"Friday?","offsetMilliseconds":1900,"durationMilliseconds":400},
+               {"text":"Great,","offsetMilliseconds":4000,"durationMilliseconds":300},{"text":"thanks.","offsetMilliseconds":4400,"durationMilliseconds":300}]}]}
+    """.utf8))
+    let local = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1760,"durationMilliseconds":2500,"text":"by Friday? Great,"},
+                {"speaker":1,"offsetMilliseconds":2700,"durationMilliseconds":800,"text":"Yes, tomorrow."}]}
+    """.utf8))
+    let system = try SpeechTranscriber.transcript(remote, start: 0, end: 20, track: .system)
+    let microphone = try SpeechTranscriber.transcript(local, start: 0, end: 20, track: .microphone)
+    let rendered = MarkdownRenderer.merged([
+        TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete, text: system.text, turns: system.turns),
+        TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete, text: microphone.text, turns: microphone.turns),
+    ])
+    precondition(rendered == "[00:01] Speaker A: Can you send it by Friday?\n\n[00:02] Me: Yes, tomorrow.\n\n[00:04] Speaker A: Great, thanks.",
+                 "A reply in a remote pause must sit between the split parts, and an echo across the split must go: \(rendered)")
+    print("Pause split passed: remote phrase split at its pause, reply between, echo across the split removed")
+}
+
+private func checkMicrophoneAttribution() throws {
+    let phrases = try JSONDecoder().decode(SpeechResult.self, from: Data("""
+    {"phrases":[{"speaker":0,"offsetMilliseconds":1000,"text":"First voice."},
+                {"speaker":1,"offsetMilliseconds":3000,"text":"Second voice."},
+                {"speaker":2,"offsetMilliseconds":7000,"text":"Third voice."}]}
+    """.utf8))
+    let transcript = try SpeechTranscriber.transcript(phrases, start: 0, end: 20, track: .microphone)
+    let microphone = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                                     text: transcript.text, turns: transcript.turns)
+    let silent = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                                text: "[00:00] Speaker: [no audible speech]")
+    let intro = "Speakers below were recorded by the microphone; their letters are anonymous within each section. Turns labeled Computer come from computer audio."
+    let inPerson = MarkdownRenderer.transcript(blocks: [silent, microphone])
+    precondition(inPerson.contains(intro) && inPerson.contains("[00:01] Speaker A: First voice.\n\n[00:03] Speaker B: Second voice.\n\n[00:07] Speaker C: Third voice."),
+                 "An in-person capture must keep each microphone voice and timestamp: \(inPerson)")
+
+    let system = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                                 text: "[00:02] Speaker A: Remote discussion before the next agenda item.")
+    let online = MarkdownRenderer.transcript(blocks: [system, microphone])
+    precondition(online.contains("Turns labeled Me come from the recording user's microphone.") && online.contains("[00:01] Me: First voice.\n\n[00:02] Speaker A: Remote discussion before the next agenda item.\n\n[00:03] Me: Second voice.\n\n[00:07] Me: Third voice."), online)
+
+    let discussion = String(repeating: "Room discussion. ", count: 80).trimmingCharacters(in: .whitespaces)
+    let room = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                               text: "[00:01] Speaker A: \(discussion)\n[00:03] Speaker A: Continue in the room.")
+    let notification = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 20, track: .system, status: .complete,
+                                       text: "[00:02] Speaker A: Ding.")
+    let incidental = TranscriptPolisher.tidy(MarkdownRenderer.transcript(blocks: [notification, room]))
+    precondition(incidental.contains(intro) && incidental.contains("[00:01] Speaker A: \(discussion)\n\n[00:02] Computer: Ding.\n\n[00:03] Speaker A: Continue in the room."),
+                 "Incidental computer speech must stay separate from a room voice through tidy: \(incidental)")
+
+    let presentation = String(repeating: "Presentation detail. ", count: 200).trimmingCharacters(in: .whitespaces)
+    let questions = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 1800, track: .system, status: .complete,
+                                    text: "[00:05] Speaker A: Could you explain the first measurement again?\n[00:08] Speaker A: Which samples will you compare in the next batch?\n[00:12] Speaker A: When will the remaining analysis results be ready?")
+    let windows = [(0.0, 600.0, "[00:01]"), (590.0, 1200.0, "[10:01]"), (1190.0, 1800.0, "[20:01]")]
+    let presentationBlocks = windows.enumerated().map { index, window in
+        TranscriptBlock(id: index + 1, startSeconds: window.0, endSeconds: window.1,
+                        track: .microphone, status: .complete, text: "\(window.2) Speaker A: \(presentation)")
+    }
+    let remoteQuestions = MarkdownRenderer.transcript(blocks: [questions] + presentationBlocks)
+    precondition(remoteQuestions.contains("Turns labeled Me come from the recording user's microphone.")
+                 && windows.allSatisfy { remoteQuestions.contains("\($0.2) Me: \(presentation)") },
+                 "Over 100 computer-speech characters must keep every section online, including sections with no remote question: \(remoteQuestions)")
+
+    let silentMicrophone = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 20, track: .microphone, status: .complete,
+                                          text: "[00:00] Me: [no audible speech]")
+    precondition(MarkdownRenderer.merged([silentMicrophone]) == "[00:00] Speaker: [no audible speech]")
+
+    let prompt = Prompts.transcription(context: "", start: 0, end: 20, track: .microphone)
+    precondition(prompt.contains("Source: the recording user's own microphone")
+                 && prompt.contains("Speaker A, Speaker B") && prompt.contains("everyone speaking in the room")
+                 && prompt.contains("new turn at each pause or change of speaker")
+                 && prompt.contains("[MM:SS] Speaker A: Spoken words.")
+                 && prompt.contains("[00:00] Speaker: [no audible speech]")
+                 && !prompt.contains("Label every turn Me") && !prompt.contains("nearby primary voice"), prompt)
+    print("Microphone attribution passed: anonymous room voices, online Me, incidental computer speech, session-wide online test, microphone prompt")
+}
+
+private func checkTranscriptSections() {
+    let ranges = [(0.0, 600.0), (590.0, 1200.0), (1190.0, 1800.0)]
+    let questions = [
+        "[00:02] Speaker A: First question?",
+        "[09:52] Speaker A: Second question?",
+        "[19:52] Speaker A: Third question?",
+    ]
+    let replies = [
+        "[00:03] Me: First reply.",
+        "[09:53] Me: Second reply.",
+        "[19:53] Me: Third reply.",
+    ]
+    let microphoneWindows = ranges.enumerated().map { index, range in
+        TranscriptBlock(id: index * 2 + 1, startSeconds: range.0, endSeconds: range.1,
+                        track: .microphone, status: .complete, text: replies[index])
+    }
+    let sections: (String) -> [String] = {
+        $0.components(separatedBy: "\n## ").dropFirst().map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+    let expected = [
+        "00:00–10:00\n\n[00:02] Speaker A: First question?\n\n[00:03] Me: First reply.",
+        "09:50–20:00\n\n[09:52] Speaker A: Second question?\n\n[09:53] Me: Second reply.",
+        "19:50–30:00\n\n[19:52] Speaker A: Third question?\n\n[19:53] Me: Third reply.",
+    ]
+    let system = TranscriptBlock(id: 0, startSeconds: 0, endSeconds: 1800, track: .system, status: .complete,
+                                 text: questions.joined(separator: "\n"))
+    let raw = MarkdownRenderer.transcript(blocks: [system] + microphoneWindows)
+    precondition(sections(raw) == expected, "The finer microphone windows must define bounds and interleave each reply: \(raw)")
+
+    let openings = [
+        "[00:01] Speaker A: First opening.\n[00:03] Speaker A: First closing.",
+        "[09:51] Speaker A: Second opening.\n[09:53] Speaker A: Second closing.",
+        "[19:51] Speaker A: Third opening.\n[19:53] Speaker A: Third closing.",
+    ]
+    let systemWindows = ranges.enumerated().map { index, range in
+        TranscriptBlock(id: index * 2, startSeconds: range.0, endSeconds: range.1,
+                        track: .system, status: .complete, text: openings[index])
+    }
+    let microphone = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 1800, track: .microphone, status: .complete,
+                                     text: "[00:02] Me: First prompt.\n[09:52] Me: Second prompt.\n[19:52] Me: Third prompt.")
+    let reverse = MarkdownRenderer.transcript(blocks: [microphone] + systemWindows)
+    let readable = TranscriptPolisher.tidy(reverse)
+    precondition(sections(readable) == [
+        "00:00–10:00\n\n[00:01] Speaker A: First opening.\n\n[00:02] Me: First prompt.\n\n[00:03] Speaker A: First closing.",
+        "09:50–20:00\n\n[09:51] Speaker A: Second opening.\n\n[09:52] Me: Second prompt.\n\n[09:53] Speaker A: Second closing.",
+        "19:50–30:00\n\n[19:51] Speaker A: Third opening.\n\n[19:52] Me: Third prompt.\n\n[19:53] Speaker A: Third closing.",
+    ], "The finer system windows must keep Speaker A separate across headings through tidy: \(readable)")
+
+    let equalBlocks = microphoneWindows.enumerated().flatMap { index, microphone in
+        [TranscriptBlock(id: index * 2, startSeconds: microphone.startSeconds, endSeconds: microphone.endSeconds,
+                         track: .system, status: .complete, text: questions[index]), microphone]
+    }
+    let equal = MarkdownRenderer.transcript(blocks: equalBlocks)
+    precondition(sections(equal) == expected, "Equal windows must retain their paired sections: \(equal)")
+
+    let roomWindows = systemWindows.map { block in
+        var block = block
+        block.track = .microphone
+        return block
+    }
+    let silentSystem = TranscriptBlock(id: 1, startSeconds: 0, endSeconds: 1800, track: .system, status: .complete,
+                                       text: "[00:00] Speaker: [no audible speech]")
+    let room = TranscriptPolisher.tidy(MarkdownRenderer.transcript(blocks: [silentSystem] + roomWindows))
+    precondition(sections(room) == [
+        "00:00–10:00\n\n[00:01] Speaker A: First opening. First closing.",
+        "09:50–20:00\n\n[09:51] Speaker A: Second opening. Second closing.",
+        "19:50–30:00\n\n[19:51] Speaker A: Third opening. Third closing.",
+    ], "In-person fallback windows must keep their own Speaker A through tidy: \(room)")
+    print("Transcript sections passed: finer microphone bounds, reverse fallback speaker scopes, equal-window pairing, in-person speaker scopes")
 }
 
 /// Collects structured processing progress from any isolation context.
@@ -108,7 +416,7 @@ private final class TrackFixture: URLProtocol, @unchecked Sendable {
         let content: String
         if parts.contains(where: { $0["type"] as? String == "input_audio" }) {
             if prompt.contains("Source: the recording user's own microphone") {
-                // The model's label is ignored; the track determines Me.
+                // Computer speech makes this capture online; the renderer assigns Me.
                 content = "[00:04] Speaker A: Local reply."
             } else {
                 precondition(prompt.contains("Source: the computer's audio output"))

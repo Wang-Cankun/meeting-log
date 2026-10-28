@@ -13,7 +13,7 @@ The destination project stays locked while starting, recording, and stopping. If
 
 Settings tests JSON output and sends one second of generated silence to the selected transcription service. Both services must pass before any configuration changes are saved or pending recordings resume. Failed tests keep your previous configuration. With MAI, the summary model needs text support only; without MAI, its audio input is tested too. With AI summaries on you always need a summary provider. With them off, only Azure Speech is tested and saved; a saved summary provider is kept, unused, for when summaries are turned back on. All of this setup is available in Settings, with no configuration files or shell commands. Changing the transcription selection takes effect after **Test & save** succeeds.
 
-Failed recordings stay local. **Retry** resumes their recovery, and **Show files** opens the pending recordings, even when a disk error prevented saving the failure status. If recovery can use only system audio, the completed meeting shows a partial-recovery warning and keeps both original tracks for manual recovery.
+Failed recordings stay local. **Retry** resumes their recovery, and **Show files** opens the pending recordings, even when a disk error prevented saving the failure status. If recovery can use only system audio, the completed meeting shows a partial-recovery warning and keeps both original tracks for manual recovery. To keep them for every recording, turn on **Keep original audio tracks** in Settings → Projects & storage.
 
 ## Routes
 
@@ -70,7 +70,7 @@ Use `meeting_context.md` at the archive root and in each project for meeting-spe
 
 New meetings use short Chinese folder names such as `09112026-空间多组学与R21课题合作`. The full title remains in Markdown. Uploads use 10-minute mono AAC chunks at 48 kbps, not the raw recording.
 
-When a recording includes the microphone, MeetingLog transcribes it separately from computer audio, so your own turns are labeled `Me`. Other participants keep anonymous letters unless the conversation identifies them.
+For new complete captures, MeetingLog transcribes microphone and computer audio separately. It labels microphone speech `Me` only when computer speech establishes an online meeting. Otherwise, it keeps anonymous letters for room voices and labels computer speech `Computer`. See [speaker attribution and limitations](docs/architecture.md#speaker-attribution-from-raw-tracks).
 
 Each new completed meeting includes `audio.m4a`, `transcript_raw.md`, the edited `transcript.md`, `summary.md`, and Mainland Simplified Chinese `summary_cn.md`. Cleanup removes empty fillers and obvious overlap duplicates while retaining conversation; the raw transcript remains the evidence backup. Summary regeneration previews and saves both languages. Existing transcripts are not automatically rewritten. Meetings processed with AI summaries off contain only `audio.m4a`, `transcript_raw.md` and `transcript.md`, in a folder named from the recording's start time (`MMddyyyy-会议 HHmm`) or the first imported file's name. Meeting summaries shows their transcript; they have no summary to regenerate.
 

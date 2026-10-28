@@ -30,7 +30,7 @@ struct SpeechTranscriber: Sendable {
 
     func transcribe(audio: URL, diarize: Bool, phrases: [String]) async throws -> SpeechResult {
         var definition: [String: Any] = [
-            "enhancedMode": ["enabled": true, "model": Self.model, "modelOptions": ["timestamps": "segment", "transcribeStyle": "clean"]]
+            "enhancedMode": ["enabled": true, "model": Self.model, "modelOptions": ["timestamps": "word", "transcribeStyle": "clean"]]
         ]
         if diarize { definition["diarization"] = ["enabled": true] }
         if !phrases.isEmpty { definition["phraseList"] = ["phrases": phrases] }
@@ -65,15 +65,20 @@ struct SpeechTranscriber: Sendable {
     }
 
     /// Converts diarized phrases into validated transcript turns for one section.
-    /// Speaker letters follow first appearance; the microphone track is always Me.
-    static func transcript(_ result: SpeechResult, start: Double, end: Double, track: TranscriptTrack?) throws -> String {
+    /// Speaker letters follow first appearance; microphone attribution belongs to the renderer.
+    static func transcript(_ result: SpeechResult, start: Double, end: Double, track: TranscriptTrack?) throws
+        -> (text: String, turns: [TranscriptTurn]) {
         let phrases = result.phrases
             .map { SpeechResult.Phrase(speaker: $0.speaker, offsetMilliseconds: $0.offsetMilliseconds,
-                                       text: $0.text.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)) }
+                                       durationMilliseconds: $0.durationMilliseconds,
+                                       text: $0.text.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces),
+                                       words: $0.words) }
+            .flatMap { track == nil ? [$0] : $0.splitAtPauses() }
             .filter { !$0.text.isEmpty }
             .sorted { $0.offsetMilliseconds < $1.offsetMilliseconds }
         guard !phrases.isEmpty else {
-            return "[\(clock(Int(start)))] \(track == .microphone ? "Me" : "Speaker"): [no audible speech]"
+            let turn = TranscriptTurn(startMilliseconds: Int(start) * 1000, speaker: "Speaker", text: TranscriptTurn.silence)
+            return (turn.line, [turn])
         }
         // A response whose phrases all share one offset lost its timing; accepting it would stamp every turn at one time.
         if phrases.count > 1, Set(phrases.map(\.offsetMilliseconds)).count == 1 { throw SpeechError.missingTiming }
@@ -81,27 +86,28 @@ struct SpeechTranscriber: Sendable {
 
         let latest = Int(end.rounded(.up)) - 1
         var letters: [Int?: String] = [:]
-        var turns: [(time: Int, label: String, text: String)] = []
+        var turns: [TranscriptTurn] = []
         for phrase in phrases {
             let label: String
-            if track == .microphone {
-                label = "Me"
-            } else if let known = letters[phrase.speaker] {
+            if let known = letters[phrase.speaker] {
                 label = known
             } else {
                 let index = letters.count
                 label = index < 26 ? "Speaker \(Character(UnicodeScalar(65 + index)!))" : "Speaker \(index + 1)"
                 letters[phrase.speaker] = label
             }
-            let time = max(Int(start), min(Int(start + Double(phrase.offsetMilliseconds) / 1000), latest))
-            if let last = turns.last, last.label == label {
+            let time = max(Int(start) * 1000, min(Int(start * 1000) + phrase.offsetMilliseconds, latest * 1000 + 999))
+            // A capture track holds only part of the conversation: joining its phrases here would carry every reply
+            // recorded on the other track past them.
+            if track == nil, let last = turns.last, last.speaker == label {
                 turns[turns.count - 1].text += " " + phrase.text
             } else {
-                turns.append((time, label, phrase.text))
+                turns.append(TranscriptTurn(startMilliseconds: time, durationMilliseconds: phrase.durationMilliseconds,
+                                            speaker: label, text: phrase.text))
             }
         }
-        let text = turns.map { "[\(clock($0.time))] \($0.label): \($0.text)" }.joined(separator: "\n")
-        return try TranscriptResponse.validate(text, start: start, end: end)
+        let text = turns.map(\.line).joined(separator: "\n")
+        return (try TranscriptResponse.validate(text, start: start, end: end), turns)
     }
 
     /// Names from context tables and terminology bullets bias recognition; they are hints, not forced output.
@@ -131,17 +137,46 @@ struct SpeechTranscriber: Sendable {
             .filter { (2...40).contains($0.count) && seen.insert($0.lowercased()).inserted }
             .prefix(100).map { $0 }
     }
-
-    private static func clock(_ seconds: Int) -> String {
-        String(format: "%02d:%02d", seconds / 60, seconds % 60)
-    }
 }
 
 struct SpeechResult: Decodable, Sendable {
     struct Phrase: Decodable, Sendable {
+        struct Word: Decodable, Sendable {
+            let text: String
+            let offsetMilliseconds: Int
+            let durationMilliseconds: Int?
+        }
         let speaker: Int?
         let offsetMilliseconds: Int
+        let durationMilliseconds: Int?
         let text: String
+        var words: [Word]? = nil
+
+        /// Azure keeps one speaker's speech in one phrase across long pauses. On a capture track the other side's
+        /// reply sits in such a pause, so the phrase is split there and the reply can sort between its parts.
+        func splitAtPauses() -> [Phrase] {
+            guard let words, words.count > 1 else { return [self] }
+            var starts: [String.Index] = []
+            var cursor = text.startIndex
+            for word in words {
+                guard let range = text.range(of: word.text, range: cursor..<text.endIndex) else { return [self] }
+                starts.append(range.lowerBound)
+                cursor = range.upperBound
+            }
+            var parts: [Phrase] = []
+            var first = 0
+            for next in 1...words.count {
+                let previous = words[next - 1]
+                let previousEnd = previous.offsetMilliseconds + (previous.durationMilliseconds ?? 0)
+                if next < words.count, words[next].offsetMilliseconds - previousEnd < 500 { continue }
+                let range = (first == 0 ? text.startIndex : starts[first])..<(next < words.count ? starts[next] : text.endIndex)
+                parts.append(Phrase(speaker: speaker, offsetMilliseconds: words[first].offsetMilliseconds,
+                                    durationMilliseconds: previousEnd - words[first].offsetMilliseconds,
+                                    text: text[range].trimmingCharacters(in: .whitespaces)))
+                first = next
+            }
+            return parts
+        }
     }
     let phrases: [Phrase]
 

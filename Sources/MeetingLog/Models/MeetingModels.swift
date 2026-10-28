@@ -19,7 +19,7 @@ struct SessionManifest: Codable, Identifiable {
     var importedParts: [ImportedAudioPart]? = nil
 }
 
-/// Captured meetings transcribe each raw track separately so the microphone identifies the recording user.
+/// Captured meetings transcribe each raw track separately; rendering decides whether microphone voices are the recording user.
 enum TranscriptTrack: String, Codable, Sendable {
     case system
     case microphone
@@ -38,7 +38,10 @@ struct TranscriptBlock: Codable, Identifiable, Sendable {
     var track: TranscriptTrack? = nil
     var status: Status = .pending
     var text: String = ""
+    var turns: [TranscriptTurn]? = nil
     var error: String?
+
+    var resolvedTurns: [TranscriptTurn] { turns ?? TranscriptTurn.parse(text) }
 }
 
 struct ActionItem: Codable, Equatable {

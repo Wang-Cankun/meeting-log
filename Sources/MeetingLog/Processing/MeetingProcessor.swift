@@ -7,6 +7,8 @@ struct MeetingProcessor {
     let client: ProviderClient?
     /// When set, a speech service transcribes audio and the provider handles only text steps.
     var speech: SpeechTranscriber? = nil
+    /// Keeps the separate capture tracks in the archived meeting; the computer-audio track is uncompressed.
+    var keepsOriginalAudio = false
     var progress: @Sendable (ProcessingProgress) -> Void = { _ in }
 
     func process(directory: URL, manifest original: SessionManifest, projectName: String?) async throws -> URL {
@@ -65,7 +67,7 @@ struct MeetingProcessor {
                         let feedback = attempt == 0 ? "" : "\nYour previous response failed format/timestamp validation. Re-transcribe the audio using the exact output contract; the last timestamp must be strictly before the excerpt end."
                         let response = try await client.transcribe(audio: chunk.url, prompt: prompt + feedback)
                         do {
-                            return try TranscriptResponse.validate(response, start: chunk.startSeconds, end: chunk.endSeconds)
+                            return (try TranscriptResponse.validate(response, start: chunk.startSeconds, end: chunk.endSeconds), nil)
                         } catch {
                             if attempt == 1 { throw error }
                         }
@@ -174,7 +176,7 @@ struct MeetingProcessor {
         try? FileManager.default.removeItem(at: destination.appending(path: "parts"))
         try? FileManager.default.removeItem(at: destination.appending(path: "coverage.json"))
         try? FileManager.default.removeItem(at: destination.appending(path: "session.json"))
-        if preparation?.retainsRawTracks != true {
+        if !keepsOriginalAudio, preparation?.retainsRawTracks != true {
             try? FileManager.default.removeItem(at: destination.appending(path: "system-audio.caf"))
             try? FileManager.default.removeItem(at: destination.appending(path: "microphone.m4a"))
         }
@@ -235,8 +237,9 @@ struct MeetingProcessor {
                 defer { try? FileManager.default.removeItem(at: upload) }
                 let range = (start: block.startSeconds, end: block.endSeconds)
                 try await Task.detached { try MediaProcessor.encodeFLAC(source: source, destination: upload, range: range) }.value
-                let result = try await speech.transcribe(audio: upload, diarize: block.track != .microphone, phrases: phrases)
-                return try SpeechTranscriber.transcript(result, start: block.startSeconds, end: block.endSeconds, track: block.track)
+                let result = try await speech.transcribe(audio: upload, diarize: true, phrases: phrases)
+                let transcript = try SpeechTranscriber.transcript(result, start: block.startSeconds, end: block.endSeconds, track: block.track)
+                return (transcript.text, transcript.turns)
             } checkpoint: { updated in
                 try saveBlocks(updated, in: directory)
             } progress: { completed, total in
@@ -270,6 +273,7 @@ struct MeetingProcessor {
                                                 endSeconds: entry.element.endSeconds, track: entry.element.track)
                     block.status = entry.element.status
                     block.text = entry.element.text
+                    block.turns = entry.element.turns
                     return block
                 }
             try saveBlocks(split, in: directory)

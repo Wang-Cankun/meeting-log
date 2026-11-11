@@ -59,8 +59,8 @@ enum PanelRender {
     }
 
     private static let projects = [
-        "Ling_Xenium", "Ling_Xenium/projects/Xenium_workflow", "Team_update", "Lung_explorer",
-        "UTSW_Wang_Lab/projects/Spatial_transcriptomics/projects/Kidney_disease_consortium/projects/Childhood_lupus_nephritis_multimodal_spatial_atlas",
+        "Spatial_core", "Spatial_core/projects/Xenium_workflow", "Team_update", "Lung_explorer",
+        "Example_Lab/projects/Spatial_transcriptomics/projects/Tissue_atlas_consortium/projects/Pediatric_multimodal_spatial_atlas_pilot",
     ].map(project)
 
     private static func day(_ offset: Int, hour: Int, minute: Int = 0) -> Date {
@@ -70,9 +70,9 @@ enum PanelRender {
     }
 
     private static let meetings: [ArchivedMeeting] = [
-        ("Automating Xenium Processing and Cell Type Annotation Pipeline", "Ling_Xenium/projects/Xenium_workflow", -6),
+        ("Automating Xenium Processing and Cell Type Annotation Pipeline", "Spatial_core/projects/Xenium_workflow", -6),
         ("团队周会与项目进展更新", "Team_update", -8),
-        ("Childhood Lupus Nephritis Multi-Modal Spatial Data Handoff", "Lung_explorer", -8),
+        ("Pediatric Multi-Modal Spatial Atlas Data Handoff", "Lung_explorer", -8),
     ].map { title, projectName, offset in
         let date = day(offset, hour: 14, minute: 5)
         return ArchivedMeeting(title: title, projectName: projectName, dateText: "", date: date, createdAt: date,
@@ -95,7 +95,7 @@ enum PanelRender {
             ArchiveStore.rootDefaultsKey: root.path,
             "providerAPIKey": "render",
             "microphoneEnabled": true,
-            "selectedProjectName": "Ling_Xenium/projects/Xenium_workflow",
+            "selectedProjectName": "Spatial_core/projects/Xenium_workflow",
             "sourcesExpanded": scenario == .readyExpanded,
         ]
         if scenario == .longPath {
@@ -131,7 +131,7 @@ enum PanelRender {
             model.debugSetPanelState(
                 projects: projects, recentMeetings: meetings,
                 pendingItems: [
-                    pending(.processing, startedAt: day(0, hour: 16, minute: 20), project: "Ling_Xenium/projects/Xenium_workflow"),
+                    pending(.processing, startedAt: day(0, hour: 16, minute: 20), project: "Spatial_core/projects/Xenium_workflow"),
                     pending(.failed("Not every audio block was transcribed"), startedAt: day(-1, hour: 16, minute: 30), project: "Team_update"),
                 ],
                 processingProgress: ProcessingProgress(stage: .transcribe(completed: 3, total: 8),

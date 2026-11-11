@@ -159,19 +159,19 @@ do {
     let root = FileManager.default.temporaryDirectory.appending(path: "nested-\(UUID())")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ArchiveStore(root: root)
-    let hub = try store.createProject(named: "Ling_Xenium")
-    let paths = ["Ling_Xenium/projects/David", "Ling_Xenium/projects/Joshi", "Ling_Xenium/projects/David/studies/共同研究", "Ling_Xenium/projects/Joshi/studies/共同研究"]
+    let hub = try store.createProject(named: "Spatial_core")
+    let paths = ["Spatial_core/projects/Alpha", "Spatial_core/projects/Beta", "Spatial_core/projects/Alpha/studies/共同研究", "Spatial_core/projects/Beta/studies/共同研究"]
     for path in paths { try FileManager.default.createDirectory(at: root.appending(path: path), withIntermediateDirectories: true) }
     try FileManager.default.createDirectory(at: hub.url.appending(path: "results/not-a-project"), withIntermediateDirectories: true)
     try FileManager.default.createSymbolicLink(at: hub.url.appending(path: "projects/escape"), withDestinationURL: root)
     try "HUB_CONTEXT".write(to: hub.url.appending(path: "meeting_context.md"), atomically: true, encoding: .utf8)
-    try "DAVID_CONTEXT".write(to: root.appending(path: paths[0] + "/meeting_context.md"), atomically: true, encoding: .utf8)
-    try "JOSHI_PRIVATE_CONTEXT".write(to: root.appending(path: paths[1] + "/meeting_context.md"), atomically: true, encoding: .utf8)
+    try "ALPHA_CONTEXT".write(to: root.appending(path: paths[0] + "/meeting_context.md"), atomically: true, encoding: .utf8)
+    try "BETA_PRIVATE_CONTEXT".write(to: root.appending(path: paths[1] + "/meeting_context.md"), atomically: true, encoding: .utf8)
     let projects = try store.projects()
     precondition(projects.count == 5)
     precondition(Set(projects.map(\.name)).count == 5)
     let context = try store.meetingContext(for: paths[2])
-    precondition(context.contains("HUB_CONTEXT") && context.contains("DAVID_CONTEXT") && !context.contains("JOSHI"))
+    precondition(context.contains("HUB_CONTEXT") && context.contains("ALPHA_CONTEXT") && !context.contains("BETA"))
     let destination = try store.finalDirectory(projectName: paths[2], title: "测试", startedAt: Date())
     try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
     try "# Nested summary".write(to: destination.appending(path: "summary.md"), atomically: true, encoding: .utf8)

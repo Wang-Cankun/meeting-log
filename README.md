@@ -68,10 +68,14 @@ The **More** menu in Meeting summaries also offers **Move to project…**, inclu
 
 Use `meeting_context.md` at the archive root and in each project for meeting-specific names, aliases, and preferences. General project `context.md` is separate.
 
-New meetings use short Chinese folder names such as `09112026-空间多组学与R21课题合作`. The full title remains in Markdown. Uploads use 10-minute mono AAC chunks at 48 kbps, not the raw recording.
+New meetings use short Chinese folder names such as `09112026-空间多组学项目讨论`. The full title remains in Markdown. Uploads use 10-minute mono AAC chunks at 48 kbps, not the raw recording.
 
 For new complete captures, MeetingLog transcribes microphone and computer audio separately. It labels microphone speech `Me` only when computer speech establishes an online meeting. Otherwise, it keeps anonymous letters for room voices and labels computer speech `Computer`. See [speaker attribution and limitations](docs/architecture.md#speaker-attribution-from-raw-tracks).
 
 Each new completed meeting includes `audio.m4a`, `transcript_raw.md`, the edited `transcript.md`, `summary.md`, and Mainland Simplified Chinese `summary_cn.md`. Cleanup removes empty fillers and obvious overlap duplicates while retaining conversation; the raw transcript remains the evidence backup. Summary regeneration previews and saves both languages. Existing transcripts are not automatically rewritten. Meetings processed with AI summaries off contain only `audio.m4a`, `transcript_raw.md` and `transcript.md`, in a folder named from the recording's start time (`MMddyyyy-会议 HHmm`) or the first imported file's name. Meeting summaries shows their transcript; they have no summary to regenerate.
 
 New summaries and regenerated summaries use `transcript_raw.md` for generation, evidence review, and quoted line references. The readable `transcript.md` remains for browsing. Old meetings without raw transcription explicitly fall back to `transcript.md`; an empty or unreadable raw file is an error. Both summary languages identify the evidence file, and saving rejects a preview if either transcript or the recording recovery details changed meanwhile.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

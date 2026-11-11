@@ -1,5 +1,10 @@
 # Release notes
 
+## 0.2.1
+
+- MeetingLog is open source under the [Apache License 2.0](../LICENSE).
+- Built-in panel previews and checks use placeholder project and person names. App behavior is unchanged from 0.2.0.
+
 ## 0.2.0
 
 - Azure Speech now distinguishes voices on the microphone track, and the chat microphone prompt asks to transcribe everyone speaking in the room. Online captures label microphone speech `Me`; in-person captures retain anonymous speaker letters and label computer speech `Computer`. See [speaker attribution and limitations](architecture.md#speaker-attribution-from-raw-tracks).

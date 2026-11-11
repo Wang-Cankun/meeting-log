@@ -79,12 +79,12 @@ func checkSpeechTranscription() async throws {
     # Context
     | Name | Background |
     | --- | --- |
-    | Cankun Wang (Cankun) | Builder |
-    | Reza | Postdoc |
+    | Alex Chen (Alex) | Builder |
+    | Sam | Postdoc |
     ## Terms
     - Xenium, TMA (tissue microarray); H5AD.
     """)
-    precondition(phrases == ["Cankun Wang", "Cankun", "Reza", "Xenium", "TMA", "tissue microarray", "H5AD"], "\(phrases)")
+    precondition(phrases == ["Alex Chen", "Alex", "Sam", "Xenium", "TMA", "tissue microarray", "H5AD"], "\(phrases)")
 
     let root = FileManager.default.temporaryDirectory.appending(path: "speech-check-\(UUID())")
     defer { try? FileManager.default.removeItem(at: root) }

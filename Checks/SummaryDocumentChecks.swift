@@ -110,7 +110,7 @@ private func checkChineseSummaryHeadings() {
     ## 待办事项
 
     - 发送 kBET 结果
-      负责人：Ling Cai · 截止日期：—
+      负责人：Alex Chen · 截止日期：—
       全量运行前需要。
       证据：L42: “I'll send kBET”; L57 [unverified reference]: “maybe”
 
@@ -152,7 +152,7 @@ private func checkChineseSummaryHeadings() {
                                                    .inventory, .keyTopics, .needsVerification, .other],
                  "\(chinese.sections.map(\.kind))")
     guard case let .actions(cards) = chinese.sections[1].body else { preconditionFailure("\(chinese.sections[1])") }
-    precondition(cards == [ActionCard(task: "发送 kBET 结果", hasFields: true, owner: "Ling Cai", deadline: nil,
+    precondition(cards == [ActionCard(task: "发送 kBET 结果", hasFields: true, owner: "Alex Chen", deadline: nil,
                                       notes: ["全量运行前需要。"],
                                       evidence: [EvidenceMark(line: 42, verified: true, quote: "I'll send kBET"),
                                                  EvidenceMark(line: 57, verified: false, quote: "maybe")])], "\(cards)")
@@ -194,7 +194,7 @@ private func checkEvidenceReferences() {
     precondition(SummaryDocument.ownerAndDeadline("Location: BDSC · Role: archive") == nil)
     precondition(SummaryDocument.ownerAndDeadline("Due to the holiday: send it early") == nil, "Prose must not become a deadline")
     precondition(SummaryDocument.ownerAndDeadline("**Owners**: Me · Due date: —")! == ("Me", nil))
-    precondition(SummaryDocument.ownerAndDeadline("负责人：Ling Cai · 截止时间：周五")! == ("Ling Cai", "周五"))
+    precondition(SummaryDocument.ownerAndDeadline("负责人：Alex Chen · 截止时间：周五")! == ("Alex Chen", "周五"))
     let prose = SummaryDocument.parse("## Action items\n\n- Send slides\n  Due to the holiday: send it early\n")
     precondition(prose.sections[0].body == .actions([ActionCard(task: "Send slides", notes: ["Due to the holiday: send it early"])]),
                  "\(prose.sections)")
@@ -297,10 +297,10 @@ private func checkLibraryTreeAndSearch() {
     // The breadcrumb names the project, not the meeting folder, and hides structural containers.
     precondition(MeetingLibrary.projectPath("Lab/projects/Atlas") == "Lab › Atlas" && MeetingLibrary.projectPath("Inbox") == "Inbox")
     // Underscores display as spaces everywhere a project is named; the folder name itself is unchanged.
-    let underscored = MeetingLibrary.tree(["Ling_Xenium", "Ling_Xenium/projects/Xenium_workflow"])
-    precondition(underscored[0].displayName == "Ling Xenium" && underscored[0].children[0].displayName == "Xenium workflow"
-                 && underscored[0].children[0].name == "Ling_Xenium/projects/Xenium_workflow")
-    precondition(MeetingLibrary.projectPath("Ling_Xenium/projects/Xenium_workflow") == "Ling Xenium › Xenium workflow")
+    let underscored = MeetingLibrary.tree(["Spatial_core", "Spatial_core/projects/Xenium_workflow"])
+    precondition(underscored[0].displayName == "Spatial core" && underscored[0].children[0].displayName == "Xenium workflow"
+                 && underscored[0].children[0].name == "Spatial_core/projects/Xenium_workflow")
+    precondition(MeetingLibrary.projectPath("Spatial_core/projects/Xenium_workflow") == "Spatial core › Xenium workflow")
     precondition(MeetingLibrary.matches("atlas 批次", fields: ["Atlas plan", "处理批次"]))
     precondition(!MeetingLibrary.matches("atlas missing", fields: ["Atlas plan"]))
     precondition(MeetingLibrary.matches("  ", fields: []) && MeetingLibrary.matches("etude", fields: ["Étude"]))
